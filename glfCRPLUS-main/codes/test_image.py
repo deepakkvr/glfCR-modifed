@@ -12,6 +12,7 @@ import numpy as np
 import tifffile
 import matplotlib.pyplot as plt
 from pathlib import Path
+import glob
 
 # Add codes directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -57,16 +58,17 @@ def normalize_sar_image(image):
     return normalized
 
 
-def test_single_image(image_path, model_checkpoint, output_dir, device='cuda'):
+def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, device='cuda'):
     """
     Test a single image with the CloudRemovalCrossAttention model
     
     Args:
-        image_path: Path to the cloudy optical image (with or without extension)
+        image_path: Path to the cloudy optical image (S2) (with or without extension)
                     Can be full path like: /path/to/ROIs2017_winter_s2_cloudy_102_p100.tif
                     Or base path like: /path/to/image_base_name
         model_checkpoint: Path to the model checkpoint
         output_dir: Directory to save output images
+        sar_path: Path to SAR image (S1). If None, will try to auto-detect
         device: Device to run on ('cuda' or 'cpu')
     
     Returns:
@@ -81,11 +83,9 @@ def test_single_image(image_path, model_checkpoint, output_dir, device='cuda'):
         # Full path with extension - extract base and directory
         optical_path = image_path
         base_path = image_path.replace('.tif', '').replace('.TIF', '').replace('.tiff', '').replace('.TIFF', '')
-        image_dir = os.path.dirname(optical_path)
     else:
         # Base path without extension
         base_path = image_path
-        image_dir = os.path.dirname(base_path)
         optical_path = None
     
     # If optical_path not found, look for it
@@ -103,39 +103,73 @@ def test_single_image(image_path, model_checkpoint, output_dir, device='cuda'):
                 optical_path = candidate
                 break
     
-    # Find SAR image in the same directory as optical image
-    if optical_path:
+    if not optical_path or not os.path.exists(optical_path):
+        raise FileNotFoundError(f"Could not find optical image for {base_path}")
+    
+    # Find SAR image
+    if sar_path is None:
+        # Auto-detect SAR image
         image_dir = os.path.dirname(optical_path)
         filename_base = os.path.basename(optical_path)
         
-        # Extract the base name (e.g., ROIs2017_winter_s2_cloudy_102_p100)
-        filename_base = filename_base.replace('_B1_B12', '').replace('.tif', '').replace('.TIF', '')
+        # Extract the base name and scene ID (e.g., 102_p100 from ROIs2017_winter_s2_cloudy_102_p100)
+        filename_base_clean = filename_base.replace('_B1_B12', '').replace('.tif', '').replace('.TIF', '')
+        # Extract scene ID (last part after last underscore)
+        scene_id_parts = filename_base_clean.split('_')
+        if len(scene_id_parts) >= 2:
+            scene_id = '_'.join(scene_id_parts[-2:])  # e.g., "102_p100"
+        else:
+            scene_id = filename_base_clean
         
+        # Try same directory first
         sar_candidates = [
-            os.path.join(image_dir, filename_base + '_sar.tif'),
-            os.path.join(image_dir, filename_base + '_VV_VH.tif'),
-            os.path.join(image_dir, filename_base + '_sar.TIF'),
-            os.path.join(image_dir, filename_base + '_VV_VH.TIF'),
-            # Also try looking for files with 'sar' or 'SAR' in name in same directory
+            os.path.join(image_dir, filename_base_clean + '_sar.tif'),
+            os.path.join(image_dir, filename_base_clean + '_VV_VH.tif'),
+            os.path.join(image_dir, filename_base_clean + '_sar.TIF'),
+            os.path.join(image_dir, filename_base_clean + '_VV_VH.TIF'),
         ]
         
-        # If SAR still not found, search in same directory
-        if not any(os.path.exists(c) for c in sar_candidates):
-            sar_files = [f for f in os.listdir(image_dir) if 'sar' in f.lower() or 'vv' in f.lower()]
-            if sar_files:
-                sar_path = os.path.join(image_dir, sar_files[0])
-                sar_candidates.append(sar_path)
-    else:
-        raise FileNotFoundError(f"Could not find optical image for {base_path}")
-    
-    sar_path = None
-    for candidate in sar_candidates:
-        if os.path.exists(candidate):
-            sar_path = candidate
-            break
-    
-    if not sar_path:
-        raise FileNotFoundError(f"Could not find SAR image in {image_dir}. Looked for: {sar_candidates}")
+        # Also try parent directory (for cases where S1 and S2 are in different subdirs)
+        parent_dir = os.path.dirname(image_dir)
+        if parent_dir != image_dir:  # Check we're not at root
+            sar_candidates.extend([
+                os.path.join(parent_dir, f'ROIs2017_winter_s1_{scene_id}.tif'),
+                os.path.join(parent_dir, f'ROIs2017_winter_s1_{scene_id}.TIF'),
+            ])
+            
+            # Also check s1 subdirectories
+            s1_search_patterns = [
+                os.path.join(parent_dir, '*s1*', f'*{scene_id}.tif'),
+                os.path.join(parent_dir, '*s1*', f'*{scene_id}.TIF'),
+            ]
+            for pattern in s1_search_patterns:
+                matches = glob.glob(pattern, recursive=True)
+                sar_candidates.extend(matches)
+        
+        # Search for SAR file
+        sar_found = None
+        for candidate in sar_candidates:
+            if os.path.exists(candidate):
+                sar_found = candidate
+                break
+        
+        if not sar_found and parent_dir != image_dir:
+            # Fallback: search more broadly in parent directories
+            s1_dir = os.path.join(parent_dir, 'ROIs2017_winter_s1')
+            if os.path.exists(s1_dir):
+                sar_files = glob.glob(os.path.join(s1_dir, '**', f'*{scene_id}*.tif'), recursive=True)
+                if sar_files:
+                    sar_found = sar_files[0]
+        
+        if sar_found:
+            sar_path = sar_found
+        else:
+            raise FileNotFoundError(
+                f"Could not auto-detect SAR image for scene {scene_id}. "
+                f"Please provide --sar_path directly. Checked: {sar_candidates}"
+            )
+    elif not os.path.exists(sar_path):
+        raise FileNotFoundError(f"SAR image not found: {sar_path}")
     
     print(f"Loading SAR image: {sar_path}")
     print(f"Loading Optical image: {optical_path}")
@@ -250,7 +284,9 @@ def main():
         description='Test CloudRemovalCrossAttention model on a single image'
     )
     parser.add_argument('--image_path', type=str, required=True,
-                        help='Path to the image (without extension)')
+                        help='Path to the cloudy optical image (S2) with or without extension')
+    parser.add_argument('--sar_path', type=str, default=None,
+                        help='Path to the SAR image (S1). If not provided, will auto-detect')
     parser.add_argument('--model_checkpoint', type=str, required=True,
                         help='Path to the model checkpoint (.pth file)')
     parser.add_argument('--output_dir', type=str, default='/kaggle/output/images_pred',
@@ -275,6 +311,7 @@ def main():
     # Run test
     output = test_single_image(
         image_path=args.image_path,
+        sar_path=args.sar_path,
         model_checkpoint=args.model_checkpoint,
         output_dir=args.output_dir,
         device=device
