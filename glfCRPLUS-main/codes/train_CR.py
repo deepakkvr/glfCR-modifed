@@ -179,9 +179,12 @@ if __name__ == '__main__':
                 self.first_batch = True
             
             def set_input(self, data):
-                # Debug: Print available keys on first batch
+                # Debug: Print available keys and shapes on first batch
                 if self.first_batch:
                     print(f"DEBUG: Available data keys: {list(data.keys())}")
+                    for key in data.keys():
+                        if isinstance(data[key], torch.Tensor):
+                            print(f"  {key}: shape {data[key].shape}")
                     self.first_batch = False
                 
                 # Handle both old and new key names
@@ -189,9 +192,9 @@ if __name__ == '__main__':
                 sar_key = 'sar' if 'sar' in data else 'SAR_data'
                 cloudfree_key = 'cloudfree_optical' if 'cloudfree_optical' in data else 'cloudfree_data'
                 
-                self.cloudy_optical = data[cloudy_key].to(self.device)
-                self.sar_img = data[sar_key].to(self.device)
-                self.cloudfree_data = data[cloudfree_key].to(self.device)
+                self.cloudy_optical = data[cloudy_key].to(self.device)  # (B, 13, H, W)
+                self.sar_img = data[sar_key].to(self.device)            # (B, 2, H, W)
+                self.cloudfree_data = data[cloudfree_key].to(self.device)  # (B, 13, H, W)
             
             def forward(self):
                 self.pred_Cloudfree_data = self.net_G(self.cloudy_optical, self.sar_img)

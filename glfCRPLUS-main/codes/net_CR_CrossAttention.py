@@ -231,7 +231,7 @@ class Refinement(nn.Module):
 
 class Decoder(nn.Module):
     """Symmetric decoder with upsampling and skip connections"""
-    def __init__(self):
+    def __init__(self, output_channels=13):
         super(Decoder, self).__init__()
         # UpLevel-1: E3 scale -> E2 scale
         self.up1 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
@@ -241,8 +241,9 @@ class Decoder(nn.Module):
         self.up2 = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
         self.dec2 = ConvBlock(128 + 64, 64, kernel_size=3, stride=1, padding=1)
         
-        # Final output layer: E1 scale -> cloud-free image
-        self.final_conv = nn.Conv2d(64, 3, kernel_size=1, padding=0)
+        # Final output layer: E1 scale -> cloud-free optical image
+        # Output 13 channels to match Sentinel-2 optical bands
+        self.final_conv = nn.Conv2d(64, output_channels, kernel_size=1, padding=0)
         
     def forward(self, refined_3, feat_opt_2, feat_opt_1):
         """
@@ -274,11 +275,11 @@ class CloudRemovalCrossAttention(nn.Module):
     Complete Cloud Removal Network with Cross-Attention and Speckle-Aware Gating
     
     Architecture:
-    1. Dual Encoders: Separate optical (3ch) and SAR (1ch) encoders
+    1. Dual Encoders: Separate optical (13ch) and SAR (2ch) encoders
     2. Global Cross-Attention: SAR guides optical feature refinement
     3. Speckle-Aware Gating: SAR-based gating for noise mitigation
     4. Refinement: Fuses gated features with original optical
-    5. Symmetric Decoder: Upsampling with skip connections
+    5. Symmetric Decoder: Upsampling with skip connections, outputs 13 channels
     """
     
     def __init__(self, num_heads=8, qkv_bias=True, qk_scale=None, 
@@ -306,15 +307,15 @@ class CloudRemovalCrossAttention(nn.Module):
         self.refinement = Refinement(dim=256)
         
         # Decoder
-        self.decoder = Decoder()
+        self.decoder = Decoder(output_channels=13)
         
     def forward(self, optical_img, sar_img):
         """
         Args:
-            optical_img: (B, 3, H, W) - cloudy optical image
-            sar_img: (B, 1, H, W) - co-registered SAR image
+            optical_img: (B, 13, H, W) - cloudy optical image (Sentinel-2 13 bands)
+            sar_img: (B, 2, H, W) - co-registered SAR image (VV and VH polarizations)
         Returns:
-            output: (B, 3, H, W) - cloud-free optical image
+            output: (B, 13, H, W) - cloud-free optical image
         """
         # Encode optical and SAR images
         feat_opt_1, feat_opt_2, feat_opt_3 = self.optical_encoder(optical_img)
@@ -354,8 +355,8 @@ if __name__ == "__main__":
     batch_size = 4
     height, width = 512, 512
     
-    optical_img = torch.randn(batch_size, 3, height, width)  # Cloudy optical image
-    sar_img = torch.randn(batch_size, 1, height, width)      # SAR image
+    optical_img = torch.randn(batch_size, 13, height, width)  # Cloudy optical image (13 bands)
+    sar_img = torch.randn(batch_size, 2, height, width)       # SAR image (2 polarizations)
     
     model = CloudRemovalCrossAttention()
     output = model(optical_img, sar_img)
@@ -363,4 +364,5 @@ if __name__ == "__main__":
     print(f"Input optical shape: {optical_img.shape}")
     print(f"Input SAR shape: {sar_img.shape}")
     print(f"Output shape: {output.shape}")
+    print(f"Expected output shape: torch.Size([{batch_size}, 13, {height}, {width}])")
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
