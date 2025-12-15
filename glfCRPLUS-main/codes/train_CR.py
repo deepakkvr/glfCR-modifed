@@ -244,6 +244,11 @@ if __name__ == '__main__':
         'config': vars(opts),
         'epochs': []
     }
+    
+    # Initialize log path before training loop
+    log_dir = os.path.join(opts.save_model_dir, 'logs')
+    os.makedirs(log_dir, exist_ok=True)
+    log_path = os.path.join(log_dir, f'{opts.experiment_name}_log.json')
 
     total_steps = 0
     train_start_time = time.time()
@@ -337,9 +342,6 @@ if __name__ == '__main__':
         print(f"{'='*60}")
         
         # Save training log after each epoch
-        log_dir = os.path.join(opts.save_model_dir, 'logs')
-        os.makedirs(log_dir, exist_ok=True)
-        log_path = os.path.join(log_dir, f'{opts.experiment_name}_log.json')
         with open(log_path, 'w') as f:
             json.dump(training_log, f, indent=2)
 
