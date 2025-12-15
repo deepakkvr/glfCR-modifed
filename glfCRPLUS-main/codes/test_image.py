@@ -1,6 +1,6 @@
 """
 Test a single image with CloudRemovalCrossAttention model
-Usage: python test_image.py --image_path <path_to_image> --model_checkpoint <path_to_checkpoint> --output_dir /kaggle/output/images_pred
+Usage: python test_image.py --image_path <path_to_image> --model_checkpoint <path_to_checkpoint> --output_dir /kaggle/working/images_pred
 """
 
 import os
@@ -166,7 +166,7 @@ def find_reference_image(image_path):
     return None
 
 
-def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, device='cuda'):
+def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, cloudfree_path=None, device='cuda'):
     """
     Test a single image with the CloudRemovalCrossAttention model
     
@@ -177,6 +177,7 @@ def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, d
         model_checkpoint: Path to the model checkpoint
         output_dir: Directory to save output images
         sar_path: Path to SAR image (S1). If None, will try to auto-detect
+        cloudfree_path: Path to cloud-free reference image. If None, will try to auto-detect
         device: Device to run on ('cuda' or 'cpu')
     
     Returns:
@@ -328,7 +329,11 @@ def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, d
     print("Computing Quality Metrics...")
     print("="*60)
     
-    ref_path = find_reference_image(optical_path)
+    ref_path = cloudfree_path
+    if ref_path is None:
+        # Try to auto-detect if not provided
+        ref_path = find_reference_image(optical_path)
+    
     if ref_path and os.path.exists(ref_path):
         try:
             print(f"Found reference image: {ref_path}")
@@ -355,7 +360,7 @@ def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, d
             print("Continuing with visualization...")
     else:
         print("Reference image not found. Skipping metric calculation.")
-        print("(Metrics require cloud-free reference image in dataset)")
+        print("(Provide --cloudfree_path to specify reference image)")
     
     print("="*60)
     
@@ -431,9 +436,11 @@ def main():
                         help='Path to the cloudy optical image (S2) with or without extension')
     parser.add_argument('--sar_path', type=str, default=None,
                         help='Path to the SAR image (S1). If not provided, will auto-detect')
+    parser.add_argument('--cloudfree_path', type=str, default=None,
+                        help='Path to the cloud-free reference image for metrics. If not provided, will auto-detect')
     parser.add_argument('--model_checkpoint', type=str, required=True,
                         help='Path to the model checkpoint (.pth file)')
-    parser.add_argument('--output_dir', type=str, default='/kaggle/output/images_pred',
+    parser.add_argument('--output_dir', type=str, default='/kaggle/working/images_pred',
                         help='Directory to save output images')
     parser.add_argument('--device', type=str, default='cuda',
                         choices=['cuda', 'cpu'],
@@ -456,6 +463,7 @@ def main():
     output = test_single_image(
         image_path=args.image_path,
         sar_path=args.sar_path,
+        cloudfree_path=args.cloudfree_path,
         model_checkpoint=args.model_checkpoint,
         output_dir=args.output_dir,
         device=device
