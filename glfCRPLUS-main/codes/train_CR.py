@@ -178,9 +178,14 @@ if __name__ == '__main__':
                 self.criterion = nn.L1Loss()
             
             def set_input(self, data):
-                self.cloudy_optical = data['cloudy_optical'].to(self.device)
-                self.sar_img = data['sar'].to(self.device)
-                self.cloudfree_data = data['cloudfree_optical'].to(self.device)
+                # Handle both old and new key names
+                cloudy_key = 'cloudy_optical' if 'cloudy_optical' in data else 'cloudy_data'
+                sar_key = 'sar' if 'sar' in data else 'SAR_data'
+                cloudfree_key = 'cloudfree_optical' if 'cloudfree_optical' in data else 'cloudfree_data'
+                
+                self.cloudy_optical = data[cloudy_key].to(self.device)
+                self.sar_img = data[sar_key].to(self.device)
+                self.cloudfree_data = data[cloudfree_key].to(self.device)
             
             def forward(self):
                 self.pred_Cloudfree_data = self.net_G(self.cloudy_optical, self.sar_img)
