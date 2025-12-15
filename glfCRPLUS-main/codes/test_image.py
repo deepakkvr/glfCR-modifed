@@ -13,6 +13,7 @@ import tifffile
 import matplotlib.pyplot as plt
 from pathlib import Path
 import glob
+from skimage.metrics import structural_similarity as ssim
 
 # Add codes directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -56,6 +57,113 @@ def normalize_sar_image(image):
         normalized[channel] = data / (clip_max[channel] - clip_min[channel])
     
     return normalized
+
+
+def calculate_psnr(pred, ref):
+    """
+    Calculate PSNR between predicted and reference images
+    
+    Args:
+        pred: Predicted image (C, H, W) or (H, W) in [0, 1]
+        ref: Reference image (C, H, W) or (H, W) in [0, 1]
+    
+    Returns:
+        PSNR value in dB
+    """
+    # Ensure same shape
+    if pred.shape != ref.shape:
+        raise ValueError(f"Shape mismatch: pred {pred.shape} vs ref {ref.shape}")
+    
+    # Calculate MSE
+    mse = np.mean((pred - ref) ** 2)
+    
+    if mse == 0:
+        return float('inf')
+    
+    # Max value is 1.0 for normalized images
+    psnr = 20 * np.log10(1.0 / np.sqrt(mse))
+    
+    return psnr
+
+
+def calculate_ssim(pred, ref):
+    """
+    Calculate SSIM between predicted and reference images
+    
+    Args:
+        pred: Predicted image (C, H, W) or (H, W) in [0, 1]
+        ref: Reference image (C, H, W) or (H, W) in [0, 1]
+    
+    Returns:
+        SSIM value (mean across channels if multi-channel)
+    """
+    # Ensure same shape
+    if pred.shape != ref.shape:
+        raise ValueError(f"Shape mismatch: pred {pred.shape} vs ref {ref.shape}")
+    
+    if len(pred.shape) == 3:
+        # Multi-channel: calculate SSIM for each channel and average
+        ssim_values = []
+        for c in range(pred.shape[0]):
+            ssim_val = ssim(ref[c], pred[c], data_range=1.0)
+            ssim_values.append(ssim_val)
+        return np.mean(ssim_values)
+    else:
+        # Single channel
+        return ssim(ref, pred, data_range=1.0)
+
+
+def find_reference_image(image_path):
+    """
+    Find the corresponding cloud-free reference image for a cloudy image
+    
+    Args:
+        image_path: Path to cloudy optical image
+    
+    Returns:
+        Path to reference image if found, None otherwise
+    """
+    # Extract base name and clean it
+    base_path = image_path.replace('.tif', '').replace('.TIF', '')
+    filename_base = os.path.basename(base_path)
+    
+    # Extract scene ID (e.g., 102_p100 from ROIs2017_winter_s2_cloudy_102_p100)
+    scene_id_parts = filename_base.split('_')
+    if len(scene_id_parts) >= 2:
+        scene_id = '_'.join(scene_id_parts[-2:])
+    else:
+        scene_id = filename_base
+    
+    # Try different reference image naming conventions
+    image_dir = os.path.dirname(image_path)
+    parent_dir = os.path.dirname(image_dir)
+    
+    ref_candidates = [
+        # Same directory with different prefix
+        os.path.join(image_dir, f'ROIs2017_winter_s2_{scene_id}_B1_B12.tif'),
+        os.path.join(image_dir, f'ROIs2017_winter_s2_{scene_id}_B1_B12.TIF'),
+        # Cloud-free subdirectory
+        os.path.join(parent_dir, 'ROIs2017_winter_s2_cloudfree', filename_base.replace('cloudy', 'cloudfree') + '_B1_B12.tif'),
+        os.path.join(parent_dir, 'ROIs2017_winter_s2_cloudfree', filename_base.replace('cloudy', 'cloudfree') + '_B1_B12.TIF'),
+    ]
+    
+    # Also search in parent directories for cloudfree folder
+    if parent_dir != image_dir:
+        cloudfree_dirs = glob.glob(os.path.join(parent_dir, '*cloudfree*'), recursive=False)
+        for cf_dir in cloudfree_dirs:
+            ref_candidates.extend([
+                os.path.join(cf_dir, f'{scene_id}_B1_B12.tif'),
+                os.path.join(cf_dir, f'{scene_id}_B1_B12.TIF'),
+                os.path.join(cf_dir, f'ROIs2017_winter_s2_{scene_id}_B1_B12.tif'),
+                os.path.join(cf_dir, f'ROIs2017_winter_s2_{scene_id}_B1_B12.TIF'),
+            ])
+    
+    # Find first existing reference
+    for candidate in ref_candidates:
+        if os.path.exists(candidate):
+            return candidate
+    
+    return None
 
 
 def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, device='cuda'):
@@ -214,6 +322,42 @@ def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, d
     
     print(f"Output shape: {output_np.shape}")
     print(f"Output range: [{output_np.min():.4f}, {output_np.max():.4f}]")
+    
+    # Try to find and load reference image for metrics
+    print("\n" + "="*60)
+    print("Computing Quality Metrics...")
+    print("="*60)
+    
+    ref_path = find_reference_image(optical_path)
+    if ref_path and os.path.exists(ref_path):
+        try:
+            print(f"Found reference image: {ref_path}")
+            ref_image = load_tiff_image(ref_path)
+            ref_normalized = normalize_optical_image(ref_image)
+            
+            # Calculate metrics
+            psnr = calculate_psnr(output_np, ref_normalized)
+            ssim_val = calculate_ssim(output_np, ref_normalized)
+            
+            print(f"\n✓ PSNR: {psnr:.4f} dB")
+            print(f"✓ SSIM: {ssim_val:.4f}")
+            
+            # Also save metrics to a text file
+            metrics_txt = os.path.join(output_dir, 'metrics.txt')
+            with open(metrics_txt, 'w') as f:
+                f.write(f"Image: {os.path.basename(optical_path)}\n")
+                f.write(f"PSNR: {psnr:.4f} dB\n")
+                f.write(f"SSIM: {ssim_val:.4f}\n")
+            print(f"✓ Metrics saved to: {metrics_txt}")
+            
+        except Exception as e:
+            print(f"Warning: Could not calculate metrics: {e}")
+            print("Continuing with visualization...")
+    else:
+        print("Reference image not found. Skipping metric calculation.")
+        print("(Metrics require cloud-free reference image in dataset)")
+    
+    print("="*60)
     
     # Save output TIFF
     output_tiff_path = os.path.join(output_dir, 'output_cloudremoved.tif')
