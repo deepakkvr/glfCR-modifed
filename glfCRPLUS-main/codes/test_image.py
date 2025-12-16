@@ -321,8 +321,11 @@ def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, c
     
     output_np = output.cpu().squeeze(0).numpy()  # (13, H, W)
     
+    # Scale output back to match input optical image range [0, 10000]
+    output_np = np.clip(output_np * 10000.0, 0, 10000).astype('float32')
+    
     print(f"Output shape: {output_np.shape}")
-    print(f"Output range: [{output_np.min():.4f}, {output_np.max():.4f}]")
+    print(f"Output range: [{output_np.min():.1f}, {output_np.max():.1f}]")
     
     # Try to find and load reference image for metrics
     print("\n" + "="*60)
