@@ -113,6 +113,58 @@ def calculate_ssim(pred, ref):
         return ssim(ref, pred, data_range=1.0)
 
 
+def calculate_sam(pred, ref):
+    """
+    Calculate Spectral Angle Mapper (SAM) between predicted and reference images
+    Common metric in remote sensing
+    
+    Args:
+        pred: Predicted image (C, H, W) normalized to [0, 1]
+        ref: Reference image (C, H, W) normalized to [0, 1]
+    
+    Returns:
+        SAM value in degrees (mean across all pixels)
+    """
+    # Flatten spatial dimensions: (C, H, W) -> (C, H*W)
+    pred_flat = pred.reshape(pred.shape[0], -1)  # (C, N)
+    ref_flat = ref.reshape(ref.shape[0], -1)    # (C, N)
+    
+    # Calculate spectral angle for each pixel
+    dots = np.sum(pred_flat * ref_flat, axis=0)  # (N,)
+    norms_pred = np.linalg.norm(pred_flat, axis=0)  # (N,)
+    norms_ref = np.linalg.norm(ref_flat, axis=0)   # (N,)
+    
+    # Avoid division by zero
+    valid = (norms_pred > 1e-8) & (norms_ref > 1e-8)
+    
+    norms_prod = norms_pred[valid] * norms_ref[valid]
+    dots_valid = dots[valid]
+    
+    # Clip to avoid numerical errors in arccos
+    cos_angles = np.clip(dots_valid / norms_prod, -1, 1)
+    angles = np.arccos(cos_angles)
+    
+    # Convert to degrees and return mean
+    sam_degrees = np.degrees(np.mean(angles))
+    return sam_degrees
+
+
+def calculate_rmse(pred, ref):
+    """
+    Calculate Root Mean Square Error (RMSE)
+    
+    Args:
+        pred: Predicted image (C, H, W) in [0, 1]
+        ref: Reference image (C, H, W) in [0, 1]
+    
+    Returns:
+        RMSE value (mean across all channels and pixels)
+    """
+    mse = np.mean((pred - ref) ** 2)
+    rmse = np.sqrt(mse)
+    return rmse
+
+
 def find_reference_image(image_path):
     """
     Find the corresponding cloud-free reference image for a cloudy image
@@ -343,19 +395,29 @@ def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, c
             ref_image = load_tiff_image(ref_path)
             ref_normalized = normalize_optical_image(ref_image)
             
-            # Calculate metrics
-            psnr = calculate_psnr(output_np, ref_normalized)
-            ssim_val = calculate_ssim(output_np, ref_normalized)
+            # Normalize output for metrics
+            output_normalized = output_np / 10000.0
             
-            print(f"\n✓ PSNR: {psnr:.4f} dB")
-            print(f"✓ SSIM: {ssim_val:.4f}")
+            # Calculate metrics
+            psnr = calculate_psnr(output_normalized, ref_normalized)
+            ssim_val = calculate_ssim(output_normalized, ref_normalized)
+            sam = calculate_sam(output_normalized, ref_normalized)
+            rmse = calculate_rmse(output_normalized, ref_normalized)
+            
+            print(f"\n✓ PSNR:  {psnr:.4f} dB")
+            print(f"✓ SSIM:  {ssim_val:.4f}")
+            print(f"✓ SAM:   {sam:.4f}°")
+            print(f"✓ RMSE:  {rmse:.6f}")
             
             # Also save metrics to a text file
             metrics_txt = os.path.join(output_dir, 'metrics.txt')
             with open(metrics_txt, 'w') as f:
                 f.write(f"Image: {os.path.basename(optical_path)}\n")
-                f.write(f"PSNR: {psnr:.4f} dB\n")
-                f.write(f"SSIM: {ssim_val:.4f}\n")
+                f.write("="*50 + "\n")
+                f.write(f"PSNR (dB):         {psnr:.4f}\n")
+                f.write(f"SSIM:              {ssim_val:.4f}\n")
+                f.write(f"SAM (degrees):     {sam:.4f}\n")
+                f.write(f"RMSE:              {rmse:.6f}\n")
             print(f"✓ Metrics saved to: {metrics_txt}")
             
         except Exception as e:

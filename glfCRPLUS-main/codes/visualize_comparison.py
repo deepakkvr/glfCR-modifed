@@ -112,28 +112,79 @@ def run_inference(optical_img, sar_img, model, device):
 
 
 def calculate_metrics(predicted, reference):
-    """Calculate PSNR and SSIM on images in [0, 10000] range"""
+    """Calculate PSNR, SSIM, SAM, and RMSE on images in [0, 10000] range"""
     from skimage.metrics import peak_signal_noise_ratio, structural_similarity
     
     # Normalize to [0, 1] for metrics
     pred_norm = np.clip(predicted / 10000.0, 0, 1)
     ref_norm = np.clip(reference / 10000.0, 0, 1)
     
-    # Calculate metrics for each band and average
-    psnr_values = []
-    ssim_values = []
+    # PSNR and SSIM
+    psnr = peak_signal_noise_ratio(ref_norm, pred_norm, data_range=1.0)
+    ssim_val = structural_similarity(ref_norm, pred_norm, data_range=1.0, channel_axis=0)
     
-    for b in range(predicted.shape[0]):
-        psnr = peak_signal_noise_ratio(ref_norm[b], pred_norm[b], data_range=1.0)
-        ssim = structural_similarity(ref_norm[b], pred_norm[b], data_range=1.0)
-        psnr_values.append(psnr)
-        ssim_values.append(ssim)
+    # SAM (Spectral Angle Mapper)
+    sam = calculate_sam(pred_norm, ref_norm)
     
-    return np.mean(psnr_values), np.mean(ssim_values)
+    # RMSE
+    rmse = calculate_rmse(pred_norm, ref_norm)
+    
+    return psnr, ssim_val, sam, rmse
+
+
+def calculate_sam(pred, ref):
+    """
+    Calculate Spectral Angle Mapper (SAM) between predicted and reference images
+    
+    Args:
+        pred: Predicted image (C, H, W) normalized to [0, 1]
+        ref: Reference image (C, H, W) normalized to [0, 1]
+    
+    Returns:
+        SAM value in degrees (mean across all pixels)
+    """
+    # Flatten spatial dimensions: (C, H, W) -> (C, H*W)
+    pred_flat = pred.reshape(pred.shape[0], -1)  # (C, N)
+    ref_flat = ref.reshape(ref.shape[0], -1)    # (C, N)
+    
+    # Calculate spectral angle for each pixel
+    dots = np.sum(pred_flat * ref_flat, axis=0)  # (N,)
+    norms_pred = np.linalg.norm(pred_flat, axis=0)  # (N,)
+    norms_ref = np.linalg.norm(ref_flat, axis=0)   # (N,)
+    
+    # Avoid division by zero
+    valid = (norms_pred > 1e-8) & (norms_ref > 1e-8)
+    
+    norms_prod = norms_pred[valid] * norms_ref[valid]
+    dots_valid = dots[valid]
+    
+    # Clip to avoid numerical errors in arccos
+    cos_angles = np.clip(dots_valid / norms_prod, -1, 1)
+    angles = np.arccos(cos_angles)
+    
+    # Convert to degrees and return mean
+    sam_degrees = np.degrees(np.mean(angles))
+    return sam_degrees
+
+
+def calculate_rmse(pred, ref):
+    """
+    Calculate Root Mean Square Error (RMSE)
+    
+    Args:
+        pred: Predicted image (C, H, W) in [0, 1]
+        ref: Reference image (C, H, W) in [0, 1]
+    
+    Returns:
+        RMSE value (mean across all channels and pixels)
+    """
+    mse = np.mean((pred - ref) ** 2)
+    rmse = np.sqrt(mse)
+    return rmse
 
 
 def create_comparison_figure(sar_img, cloudy_opt, cloudfree_opt, predicted_opt, 
-                            psnr=None, ssim=None, output_path=None):
+                            psnr=None, ssim=None, sam=None, rmse=None, output_path=None):
     """
     Create comprehensive comparison figure with 4 main views and additional details
     All images in [0, 10000] range for proper comparison
@@ -177,9 +228,9 @@ def create_comparison_figure(sar_img, cloudy_opt, cloudfree_opt, predicted_opt,
     predicted_rgb = get_rgb_composite(predicted_opt)
     ax4.imshow(predicted_rgb)
     title_text = 'Predicted (RGB)'
-    if psnr is not None and ssim is not None:
-        title_text += f'\nPSNR: {psnr:.2f} dB | SSIM: {ssim:.4f}'
-    ax4.set_title(title_text, fontsize=12, fontweight='bold', color='green')
+    if psnr is not None and ssim is not None and sam is not None and rmse is not None:
+        title_text += f'\nPSNR: {psnr:.2f} dB\nSSIM: {ssim:.4f}\nSAM: {sam:.2f}°'
+    ax4.set_title(title_text, fontsize=11, fontweight='bold', color='green')
     ax4.axis('off')
     
     # Row 2: False Color (NIR-R-G)
@@ -212,8 +263,10 @@ def create_comparison_figure(sar_img, cloudy_opt, cloudfree_opt, predicted_opt,
     ax8.axis('off')
     
     # Main title
-    fig.suptitle('Cloud Removal: SAR-Guided Optical Restoration\nCrossAttention Model (All images in [0, 10000] range)', 
-                 fontsize=16, fontweight='bold', y=0.98)
+    title_text = 'Cloud Removal: SAR-Guided Optical Restoration\nCrossAttention Model (All images in [0, 10000] range)'
+    if psnr is not None and ssim is not None and sam is not None and rmse is not None:
+        title_text += f'\nMetrics - PSNR: {psnr:.4f} dB | SSIM: {ssim:.4f} | SAM: {sam:.4f}° | RMSE: {rmse:.6f}'
+    fig.suptitle(title_text, fontsize=15, fontweight='bold', y=0.98)
     
     # Save figure
     if output_path:
@@ -292,9 +345,11 @@ def main():
     print("="*60)
     
     # Calculate metrics
-    psnr, ssim = calculate_metrics(predicted_opt, cloudfree_opt)
+    psnr, ssim, sam, rmse = calculate_metrics(predicted_opt, cloudfree_opt)
     print(f"✓ PSNR: {psnr:.4f} dB")
     print(f"✓ SSIM: {ssim:.4f}")
+    print(f"✓ SAM:  {sam:.4f}°")
+    print(f"✓ RMSE: {rmse:.6f}")
     
     print("\n" + "="*60)
     print("Creating Visualization...")
@@ -303,15 +358,17 @@ def main():
     # Create comparison figure
     output_fig = os.path.join(args.output_dir, 'cloud_removal_comparison.png')
     create_comparison_figure(sar_img, cloudy_opt, cloudfree_opt, predicted_opt, 
-                            psnr=psnr, ssim=ssim, output_path=output_fig)
+                            psnr=psnr, ssim=ssim, sam=sam, rmse=rmse, output_path=output_fig)
     
     # Save metrics
     metrics_file = os.path.join(args.output_dir, 'metrics.txt')
     with open(metrics_file, 'w') as f:
         f.write("Cloud Removal Results (All images in [0, 10000] range)\n")
         f.write("="*50 + "\n")
-        f.write(f"PSNR: {psnr:.4f} dB\n")
-        f.write(f"SSIM: {ssim:.4f}\n")
+        f.write(f"PSNR (dB):     {psnr:.4f}\n")
+        f.write(f"SSIM:          {ssim:.4f}\n")
+        f.write(f"SAM (degrees): {sam:.4f}\n")
+        f.write(f"RMSE:          {rmse:.6f}\n")
     print(f"✓ Metrics saved to: {metrics_file}")
     
     print("\n" + "="*60)
