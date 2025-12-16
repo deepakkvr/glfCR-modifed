@@ -64,11 +64,11 @@ def write_rows(path, rows, split_id=None):
         writer = csv.writer(f)
         for r in rows:
             if split_id is not None:
-                # Write with split_id as first column
-                writer.writerow([split_id, r['s1_folder'], r['s2_folder'], r['s2_cloudy_folder'], r['s2_filename'], r['s1_filename'], r['s2_cloudy_filename']])
+                # Write with split_id as first column, dataset type as second
+                writer.writerow([split_id, r['dataset_type'], r['s1_folder'], r['s2_folder'], r['s2_cloudy_folder'], r['s2_filename'], r['s1_filename'], r['s2_cloudy_filename']])
             else:
                 # Write without split_id (for combined data.csv with split_id already in r)
-                writer.writerow([r['split_id'], r['s1_folder'], r['s2_folder'], r['s2_cloudy_folder'], r['s2_filename'], r['s1_filename'], r['s2_cloudy_filename']])
+                writer.writerow([r['split_id'], r['dataset_type'], r['s1_folder'], r['s2_folder'], r['s2_cloudy_folder'], r['s2_filename'], r['s1_filename'], r['s2_cloudy_filename']])
 
 
 def main():
@@ -106,7 +106,11 @@ def main():
             if s1_info and s2c_info:
                 # Check if datasets are from same root
                 if info['root'] == s1_info['root'] == s2c_info['root']:
+                    # Determine dataset type from folder ID prefix
+                    dataset_type = 'winter' if fid.startswith('winter_') else 'spring' if fid.startswith('spring_') else 'fall'
+                    
                     triplets.append({
+                        'dataset_type': dataset_type,
                         's1_folder': s1_info['rel_folder'],
                         's2_folder': info['rel_folder'],
                         's2_cloudy_folder': s2c_info['rel_folder'],

@@ -36,20 +36,38 @@ class AlignedDataset(Dataset):
 
         fileID = self.filelist[index]
 
-        # fileID format: [split_id, s1_folder, s2_folder, s2_cloudy_folder, s2_filename, s1_filename, s2_cloudy_filename]
-        # For backward compatibility, check if we have 5 or 7 elements
+        # fileID format: [split_id, dataset_type, s1_folder, s2_folder, s2_cloudy_folder, s2_filename, s1_filename, s2_cloudy_filename]
+        # For backward compatibility, check number of elements
         if len(fileID) == 5:
             # Old format: same filename for all
             s1_path = os.path.join(self.opts.input_data_folder, fileID[1], fileID[4])
             s2_cloudfree_path = os.path.join(self.opts.input_data_folder, fileID[2], fileID[4])
             s2_cloudy_path = os.path.join(self.opts.input_data_folder, fileID[3], fileID[4])
             reference_filename = fileID[4]
-        else:
-            # New format: different filenames
+        elif len(fileID) == 7:
+            # New format without dataset_type (winter only): [split_id, s1_folder, s2_folder, s2_cloudy_folder, s2_filename, s1_filename, s2_cloudy_filename]
             s1_path = os.path.join(self.opts.input_data_folder, fileID[1], fileID[5])
             s2_cloudfree_path = os.path.join(self.opts.input_data_folder, fileID[2], fileID[4])
             s2_cloudy_path = os.path.join(self.opts.input_data_folder, fileID[3], fileID[6])
-            reference_filename = fileID[4]  # Use s2 filename as reference
+            reference_filename = fileID[4]
+        else:
+            # New format with dataset_type: [split_id, dataset_type, s1_folder, s2_folder, s2_cloudy_folder, s2_filename, s1_filename, s2_cloudy_filename]
+            dataset_type = fileID[1]
+            
+            # Construct correct root based on dataset type
+            if dataset_type == 'winter':
+                root = '/kaggle/input/sen12ms-cr-winter'
+            elif dataset_type == 'spring':
+                root = '/kaggle/input/t-glf-cr-winter'
+            elif dataset_type == 'fall':
+                root = '/kaggle/input/t-glf-cr-fall'
+            else:
+                root = self.opts.input_data_folder  # Fallback
+            
+            s1_path = os.path.join(root, fileID[2], fileID[6])
+            s2_cloudfree_path = os.path.join(root, fileID[3], fileID[5])
+            s2_cloudy_path = os.path.join(root, fileID[4], fileID[7])
+            reference_filename = fileID[5]
             
         s1_data = self.get_sar_image(s1_path).astype('float32')
         s2_cloudfree_data = self.get_opt_image(s2_cloudfree_path).astype('float32')
