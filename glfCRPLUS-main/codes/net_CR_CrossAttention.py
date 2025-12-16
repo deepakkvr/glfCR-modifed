@@ -252,7 +252,7 @@ class Decoder(nn.Module):
             feat_opt_2: (B, 128, H/2, W/2) - encoder E2 features
             feat_opt_1: (B, 64, H, W) - encoder E1 features
         Returns:
-            output: (B, 3, H, W) - cloud-free optical image
+            output: (B, 13, H, W) - cloud-free optical image (Sentinel-2 13 bands)
         """
         # UpLevel-1: upsample to E2 scale
         x = self.up1(refined_3)  # (B, 256, H/2, W/2)
@@ -264,8 +264,8 @@ class Decoder(nn.Module):
         x = torch.cat([x, feat_opt_1], dim=1)  # (B, 128+64, H, W)
         x = self.dec2(x)  # (B, 64, H, W)
         
-        # Final output
-        output = self.final_conv(x)  # (B, 3, H, W)
+        # Final output: 13 channels for Sentinel-2 optical bands
+        output = self.final_conv(x)  # (B, 13, H, W)
         
         return output
 
@@ -330,8 +330,8 @@ class CloudRemovalCrossAttention(nn.Module):
         # Refinement: fuse with original optical features
         refined_3 = self.refinement(gated_out, feat_opt_3)  # (B, 256, H/4, W/4)
         
-        # Symmetric decoder with skip connections
-        output = self.decoder(refined_3, feat_opt_2, feat_opt_1)  # (B, 3, H, W)
+        # Symmetric decoder with skip connections - outputs 13 Sentinel-2 bands
+        output = self.decoder(refined_3, feat_opt_2, feat_opt_1)  # (B, 13, H, W)
         
         return output
 

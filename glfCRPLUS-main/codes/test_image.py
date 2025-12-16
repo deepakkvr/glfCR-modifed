@@ -376,8 +376,15 @@ def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, c
     # Scale output back to match input optical image range [0, 10000]
     output_np = np.clip(output_np * 10000.0, 0, 10000).astype('float32')
     
-    print(f"Output shape: {output_np.shape}")
-    print(f"Output range: [{output_np.min():.1f}, {output_np.max():.1f}]")
+    print(f"\n✓ Output shape: {output_np.shape}")
+    print(f"✓ Expected shape: {optical_normalized.shape}")
+    print(f"✓ Shape match: {output_np.shape == optical_normalized.shape * 10000}")
+    print(f"✓ Output range: [{output_np.min():.1f}, {output_np.max():.1f}]")
+    print(f"✓ Input range: [{optical_data.min():.1f}, {optical_data.max():.1f}]")
+    
+    # Verify spatial dimensions match input
+    if output_np.shape != optical_data.shape:
+        raise ValueError(f"DIMENSION MISMATCH! Output {output_np.shape} vs Input {optical_data.shape}")
     
     # Try to find and load reference image for metrics
     print("\n" + "="*60)
@@ -429,10 +436,28 @@ def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, c
     
     print("="*60)
     
-    # Save output TIFF
-    output_tiff_path = os.path.join(output_dir, 'output_cloudremoved.tif')
+    # Save outputs in multiple formats for clarity
+    # Format 1: Full 13-band TIFF (this is the actual model output)
+    output_tiff_path = os.path.join(output_dir, 'output_13bands.tif')
     tifffile.imwrite(output_tiff_path, output_np.astype('float32'))
-    print(f"✓ Saved TIFF output: {output_tiff_path}")
+    print(f"✓ Saved 13-band TIFF: {output_tiff_path}")
+    print(f"  Note: This TIFF contains all 13 Sentinel-2 bands")
+    print(f"  When opened in viewers, you may see it as 13 'pages' - this is correct!")
+    
+    # Format 2: RGB composite TIFF (for easy viewing)
+    if output_np.shape[0] >= 3:
+        rgb = np.stack([output_np[2], output_np[1], output_np[0]], axis=0)  # (3, H, W)
+        rgb = np.clip(rgb, 0, 10000).astype('float32')
+        rgb_tiff_path = os.path.join(output_dir, 'output_rgb.tif')
+        tifffile.imwrite(rgb_tiff_path, rgb)
+        print(f"✓ Saved RGB composite TIFF: {rgb_tiff_path}")
+        print(f"  (Red=Band3, Green=Band2, Blue=Band1)")
+    
+    # Format 3: Old naming for backward compatibility
+    output_tiff_path_legacy = os.path.join(output_dir, 'output_cloudremoved.tif')
+    tifffile.imwrite(output_tiff_path_legacy, output_np.astype('float32'))
+    print(f"✓ Saved legacy format: {output_tiff_path_legacy}")
+    
     
     # Create visualization (RGB from bands 3, 2, 1 for true color)
     # Sentinel-2 bands: B1-B12, so B3=Red, B2=Green, B1=Blue (0-indexed: 2, 1, 0)
@@ -489,6 +514,15 @@ def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, c
     print("Testing Complete!")
     print("="*60)
     print(f"Output directory: {output_dir}")
+    print("\n📋 Output Format Information:")
+    print("  • output_13bands.tif: Full 13-band Sentinel-2 output (actual model result)")
+    print("  • output_rgb.tif: RGB composite for easy viewing")
+    print("  • output_cloudremoved.tif: Legacy naming (same as 13-band)")
+    print("\n⚠️  About the '13 bands as 13 separate images':")
+    print("  Multi-band TIFF files store each channel as a separate 'page'.")
+    print("  This is CORRECT behavior, not an error!")
+    print("  To read all bands in Python: tifffile.imread('output_13bands.tif') → (13, H, W)")
+    print("="*60)
     
     return output_np
 
