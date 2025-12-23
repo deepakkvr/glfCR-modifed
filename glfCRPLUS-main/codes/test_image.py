@@ -377,8 +377,8 @@ def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, c
     output_np = np.clip(output_np * 10000.0, 0, 10000).astype('float32')
     
     print(f"\n✓ Output shape: {output_np.shape}")
-    print(f"✓ Expected shape: {optical_normalized.shape}")
-    print(f"✓ Shape match: {output_np.shape == optical_normalized.shape * 10000}")
+    print(f"✓ Expected shape: {optical_data.shape}")
+    print(f"✓ Shape match: {output_np.shape == optical_data.shape}")
     # Verify spatial dimensions match input
     if output_np.shape != optical_data.shape:
         raise ValueError(f"DIMENSION MISMATCH! Output {output_np.shape} vs Input {optical_data.shape}")
@@ -456,20 +456,19 @@ def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, c
     print(f"✓ Saved legacy format: {output_tiff_path_legacy}")
     
     
-    # Create visualization (RGB from bands 3, 2, 1 for true color)
-    # Sentinel-2 bands: B1-B12, so B3=Red, B2=Green, B1=Blue (0-indexed: 2, 1, 0)
+    # Create visualization (RGB from bands 4, 3, 2 for true color)
+    # Sentinel-2 bands: B4=Red, B3=Green, B2=Blue
     try:
         # Use bands 4, 3, 2 (Red, Green, Blue) if available
         if output_np.shape[0] >= 4:
             rgb = np.stack([output_np[3], output_np[2], output_np[1]], axis=0)  # (3, H, W)
-            
-            # Normalize for visualization using actual min/max for contrast stretching
-            rgb_min = rgb.min()
-            rgb_max = rgb.max()
-            if rgb_max > rgb_min:
-                rgb = (rgb - rgb_min) / (rgb_max - rgb_min)  # Normalize to [0, 1]
-            else:
-                rgb = np.zeros_like(rgb)
+
+            # Per-channel percentile stretch (robust to outliers, preserves hue)
+            p2 = np.percentile(rgb, 2, axis=(1, 2), keepdims=True)
+            p98 = np.percentile(rgb, 98, axis=(1, 2), keepdims=True)
+            scale = p98 - p2
+            scale[scale == 0] = 1.0
+            rgb = (rgb - p2) / scale
             rgb = np.clip(rgb, 0, 1)
             rgb = (rgb * 255).astype(np.uint8)
             
