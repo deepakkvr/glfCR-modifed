@@ -257,16 +257,20 @@ def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, c
     tifffile.imwrite(output_tiff_path, output_np.astype("float32"))
     print(f"✓ Saved 13-band TIFF: {output_tiff_path}")
 
-    if output_np.shape[0] >= 3:
-        rgb = np.stack([output_np[2], output_np[1], output_np[0]], axis=0)
-        rgb_min = rgb.min()
-        rgb_max = rgb.max()
-        if rgb_max > rgb_min:
-            rgb = (rgb - rgb_min) / (rgb_max - rgb_min)
-        else:
-            rgb = np.zeros_like(rgb)
-        rgb = np.clip(rgb, 0, 1)
+    if output_np.shape[0] >= 4:
+        # True color (Sentinel-2: Red=B4, Green=B3, Blue=B2)
+        rgb = np.stack([output_np[3], output_np[2], output_np[1]], axis=0)
+
+        # Fixed true-color stretch with mild white balance and gamma to avoid color cast
+        rgb = rgb / 10000.0  # scale to [0,1]
+        rgb = np.clip(rgb, 0.0, 0.35) / 0.35  # focus on typical reflectance range
+        wb_gains = np.array([1.02, 1.0, 1.10], dtype=np.float32).reshape(3, 1, 1)
+        rgb = rgb * wb_gains
+        rgb = np.clip(rgb, 0.0, 1.0)
+        rgb = np.power(rgb, 1/1.4)  # gentle gamma
+        rgb = np.clip(rgb, 0.0, 1.0)
         rgb = (rgb * 255).astype(np.uint8)
+
         rgb_pil = np.transpose(rgb, (1, 2, 0))
         plt.figure(figsize=(12, 10))
         plt.imshow(rgb_pil)
