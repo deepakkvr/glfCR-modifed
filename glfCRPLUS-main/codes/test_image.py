@@ -466,8 +466,13 @@ def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, c
         if output_np.shape[0] >= 3:
             rgb = np.stack([output_np[2], output_np[1], output_np[0]], axis=0)  # (3, H, W)
             
-            # Normalize for visualization (output is in range [0, 10000])
-            rgb = rgb / 10000.0  # Scale to [0, 1]
+            # Normalize for visualization using actual min/max for contrast stretching
+            rgb_min = rgb.min()
+            rgb_max = rgb.max()
+            if rgb_max > rgb_min:
+                rgb = (rgb - rgb_min) / (rgb_max - rgb_min)  # Normalize to [0, 1]
+            else:
+                rgb = np.zeros_like(rgb)
             rgb = np.clip(rgb, 0, 1)
             rgb = (rgb * 255).astype(np.uint8)
             
