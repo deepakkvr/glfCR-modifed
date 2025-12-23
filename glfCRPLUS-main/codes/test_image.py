@@ -379,9 +379,15 @@ def test_single_image(image_path, model_checkpoint, output_dir, sar_path=None, c
     print(f"\n✓ Output shape: {output_np.shape}")
     print(f"✓ Expected shape: {optical_normalized.shape}")
     print(f"✓ Shape match: {output_np.shape == optical_normalized.shape * 10000}")
-    print(f"✓ Output range: [{output_np.min():.1f}, {output_np.max():.1f}]")
-    print(f"✓ Input range: [{optical_data.min():.1f}, {optical_data.max():.1f}]")
-    
+                            # Normalize for visualization using min-max stretch to boost contrast
+                            rgb_min = rgb.min()
+                            rgb_max = rgb.max()
+                            if rgb_max > rgb_min:
+                                rgb = (rgb - rgb_min) / (rgb_max - rgb_min)
+                            else:
+                                rgb = np.zeros_like(rgb)
+                            rgb = np.clip(rgb, 0, 1)
+                            rgb = (rgb * 255).astype(np.uint8)
     # Verify spatial dimensions match input
     if output_np.shape != optical_data.shape:
         raise ValueError(f"DIMENSION MISMATCH! Output {output_np.shape} vs Input {optical_data.shape}")
