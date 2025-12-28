@@ -340,8 +340,7 @@ if __name__ == '__main__':
                         self.optimizer_G, 
                         mode='max',
                         factor=opts.lr_factor, 
-                        patience=opts.lr_patience,
-                        verbose=True
+                        patience=opts.lr_patience
                     )
                 elif opts.lr_scheduler == 'cosine':
                     self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
