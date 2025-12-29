@@ -22,7 +22,7 @@ from collections import defaultdict
 
 
 WINTER_ROOT = Path("/kaggle/input/sen12ms-cr-winter")
-SPRING_ROOT = Path("/kaggle/input/t-glf-cr-winter")
+SPRING_ROOT = Path("/kaggle/input/t-glf-cr-winter")  # This is the new folder user asked for
 OUT_DIR = Path("/kaggle/working")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
