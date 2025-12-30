@@ -53,9 +53,9 @@ def test(CR_net, opts, model_name='RDN'):
 
     with torch.no_grad():
         for inputs in iterator:
-            cloudy_data = inputs['cloudy_optical'].cuda()
-            cloudfree_data = inputs['cloudfree_optical'].cuda()
-            SAR_data = inputs['sar'].cuda()
+            cloudy_data = inputs['cloudy_data'].cuda()
+            cloudfree_data = inputs['cloudfree_data'].cuda()
+            SAR_data = inputs['SAR_data'].cuda()
             file_names = inputs['file_name']
 
             # Handle different model forward signatures
