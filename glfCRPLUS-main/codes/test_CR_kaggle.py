@@ -16,7 +16,7 @@ try:
 except Exception:
     tqdm = None
 
-from metrics import PSNR, SSIM
+from metrics import PSNR, SSIM, SAM, RMSE
 from dataloader import AlignedDataset, get_train_val_test_filelists
 from net_CR_RDN import RDN_residual_CR
 
@@ -46,6 +46,8 @@ def test(CR_net, opts, model_name='RDN'):
 
     total_psnr = 0.0
     total_ssim = 0.0
+    total_sam = 0.0
+    total_rmse = 0.0
     results_per_image = []
     processed_images = 0
 
@@ -66,17 +68,25 @@ def test(CR_net, opts, model_name='RDN'):
 
             psnr_val = PSNR(pred, cloudfree_data)
             ssim_val = SSIM(pred, cloudfree_data)
+            sam_val = SAM(pred, cloudfree_data)
+            rmse_val = RMSE(pred, cloudfree_data)
 
             psnr_val = float(psnr_val.item()) if hasattr(psnr_val, "item") else float(psnr_val)
             ssim_val = float(ssim_val.item()) if hasattr(ssim_val, "item") else float(ssim_val)
+            sam_val = float(sam_val.item()) if hasattr(sam_val, "item") else float(sam_val)
+            rmse_val = float(rmse_val.item()) if hasattr(rmse_val, "item") else float(rmse_val)
 
             total_psnr += psnr_val
             total_ssim += ssim_val
+            total_sam += sam_val
+            total_rmse += rmse_val
 
             results_per_image.append({
                 "image": file_names,
                 "psnr": psnr_val,
-                "ssim": ssim_val
+                "ssim": ssim_val,
+                "sam": sam_val,
+                "rmse": rmse_val
             })
 
             processed_images += 1
@@ -85,13 +95,17 @@ def test(CR_net, opts, model_name='RDN'):
                 iterator.set_postfix({
                     "PSNR": f"{psnr_val:.3f}",
                     "SSIM": f"{ssim_val:.3f}",
+                    "SAM": f"{sam_val:.3f}",
+                    "RMSE": f"{rmse_val:.4f}",
                     "Done": processed_images
                 })
 
     avg_psnr = total_psnr / processed_images
     avg_ssim = total_ssim / processed_images
+    avg_sam = total_sam / processed_images
+    avg_rmse = total_rmse / processed_images
 
-    return avg_psnr, avg_ssim, results_per_image
+    return avg_psnr, avg_ssim, avg_sam, avg_rmse, results_per_image
 
 
 ##########################################################
@@ -192,16 +206,18 @@ def main():
     print(f"Data CSV: {opts.data_list_filepath}")
     print(f"Checkpoint: {opts.checkpoint_path}")
     print("="*60)
-    print(f"{'Image':40s} | {'PSNR':>10s} | {'SSIM':>8s}")
-    print("-"*65)
+    print(f"{'Image':40s} | {'PSNR':>10s} | {'SSIM':>8s} | {'SAM':>8s} | {'RMSE':>10s}")
+    print("-"*85)
 
-    avg_psnr, avg_ssim, results_per_image = test(CR_net, opts, model_name=opts.model_type)
+    avg_psnr, avg_ssim, avg_sam, avg_rmse, results_per_image = test(CR_net, opts, model_name=opts.model_type)
 
-    print("-"*65)
+    print("-"*85)
     print("="*60)
     print(f"Average Results:")
     print(f"  PSNR: {avg_psnr:.4f} dB")
     print(f"  SSIM: {avg_ssim:.4f}")
+    print(f"  SAM:  {avg_sam:.4f} deg")
+    print(f"  RMSE: {avg_rmse:.5f}")
     print(f"  Total Images: {len(results_per_image)}")
     print("="*60)
 
@@ -218,6 +234,8 @@ def main():
             "model": opts.model_name,
             "avg_psnr": avg_psnr,
             "avg_ssim": avg_ssim,
+            "avg_sam": avg_sam,
+            "avg_rmse": avg_rmse,
             "num_images": len(results_per_image),
             "per_image": results_per_image
         }, f, indent=4)
