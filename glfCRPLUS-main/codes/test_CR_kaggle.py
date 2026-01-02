@@ -141,6 +141,38 @@ def main():
     print("="*60)
 
     # Load model based on type
+    # Load checkpoint FIRST to determine model type
+    print(f"Loading checkpoint: {opts.checkpoint_path}")
+    try:
+        checkpoint = torch.load(
+            opts.checkpoint_path,
+            map_location="cuda",
+            weights_only=False     # REQUIRED FIX for PyTorch 2.6
+        )
+    except Exception as e:
+        print(f"Error loading checkpoint: {e}")
+        return
+
+    if "model_state_dict" in checkpoint:
+        state_dict = checkpoint["model_state_dict"]
+    elif "network" in checkpoint:
+        state_dict = checkpoint["network"]
+    else:
+        state_dict = checkpoint
+
+    # Auto-detect model type from keys
+    if opts.model_type == 'RDN':  # Only check if default or user specified RDN (to allow override if needed)
+        # Check for CrossAttention specific keys
+        has_optical = any('optical_encoder' in k for k in state_dict.keys())
+        has_cross = any('cross_attn' in k for k in state_dict.keys())
+        
+        if has_optical or has_cross:
+            print("INFO: Auto-detected CrossAttention keys in checkpoint. Switching model_type to 'CrossAttention'.")
+            opts.model_type = 'CrossAttention'
+        else:
+            print("INFO: Detected RDN keys (or no CrossAttention keys). Using 'RDN' model.")
+
+    # Load model based on type (or auto-detected type)
     if opts.model_type == 'CrossAttention':
         from net_CR_CrossAttention import CloudRemovalCrossAttention
         CR_net = CloudRemovalCrossAttention().cuda()
@@ -151,21 +183,6 @@ def main():
     CR_net.eval()
     for p in CR_net.parameters():
         p.requires_grad = False
-
-    # Load checkpoint safely
-    print(f"Loading checkpoint: {opts.checkpoint_path}")
-    checkpoint = torch.load(
-        opts.checkpoint_path,
-        map_location="cuda",
-        weights_only=False     # REQUIRED FIX for PyTorch 2.6
-    )
-
-    if "model_state_dict" in checkpoint:
-        state_dict = checkpoint["model_state_dict"]
-    elif "network" in checkpoint:
-        state_dict = checkpoint["network"]
-    else:
-        state_dict = checkpoint
 
     CR_net.load_state_dict(state_dict, strict=False)
 
