@@ -57,9 +57,10 @@ parser.add_argument('--is_test', type=bool, default=False, help='whether in test
 # Enhancement arguments
 parser.add_argument('--use_cross_attn', action='store_true', default=True, help='Use Cross-Modal Attention in RDN')
 parser.add_argument('--use_fft_loss', action='store_true', default=True, help='Use Frequency Domain Loss')
-parser.add_argument('--fft_weight', type=float, default=0.1, help='Weight for FFT loss')
+parser.add_argument('--fft_weight', type=float, default=0.5, help='Weight for FFT loss')
 parser.add_argument('--use_contrastive_loss', action='store_true', default=True, help='Use Contrastive Loss')
-parser.add_argument('--contrastive_weight', type=float, default=0.05, help='Weight for Contrastive loss')
+parser.add_argument('--contrastive_weight', type=float, default=0.1, help='Weight for Contrastive loss')
+parser.add_argument('--perceptual_weight', type=float, default=1.0, help='Weight for Perceptual (VGG) loss')
 
 
 
@@ -378,12 +379,14 @@ if __name__ == '__main__':
                 # Use EnhancedLoss if requested
                 use_fft = getattr(opts, 'use_fft_loss', False)
                 use_contrastive = getattr(opts, 'use_contrastive_loss', False)
+                use_perceptual = getattr(opts, 'perceptual_weight', 0.0) > 0 # Check for perceptual weight
                 
-                if (use_fft or use_contrastive) and EnhancedLoss is not None:
+                if (use_fft or use_contrastive or use_perceptual) and EnhancedLoss is not None:
                     fft_w = opts.fft_weight if use_fft else 0.0
                     cont_w = opts.contrastive_weight if use_contrastive else 0.0
-                    print(f"Using EnhancedLoss -> FFT: {fft_w}, Contrastive: {cont_w}")
-                    self.criterion = EnhancedLoss(fft_weight=fft_w, contrastive_weight=cont_w)
+                    perc_w = opts.perceptual_weight
+                    print(f"Using EnhancedLoss -> FFT: {fft_w}, Perceptual: {perc_w}, Contrastive: {cont_w}")
+                    self.criterion = EnhancedLoss(fft_weight=fft_w, perceptual_weight=perc_w, contrastive_weight=cont_w)
                 else:
                     self.criterion = nn.L1Loss()
 
