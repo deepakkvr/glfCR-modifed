@@ -61,6 +61,10 @@ parser.add_argument('--fft_weight', type=float, default=0.5, help='Weight for FF
 parser.add_argument('--use_contrastive_loss', action='store_true', default=True, help='Use Contrastive Loss')
 parser.add_argument('--contrastive_weight', type=float, default=0.1, help='Weight for Contrastive loss')
 parser.add_argument('--perceptual_weight', type=float, default=1.0, help='Weight for Perceptual (VGG) loss')
+# NEW: Texture & Gradient controls
+parser.add_argument('--use_gradient_loss', action='store_true', default=True, help='Use Gradient (Edge-Aware) Loss')
+parser.add_argument('--gradient_weight', type=float, default=0.1, help='Weight for Gradient loss')
+parser.add_argument('--l1_weight', type=float, default=1.0, help='Weight for L1 (Pixel) loss. Lower this to reduce smoothing.')
 
 
 
@@ -381,12 +385,24 @@ if __name__ == '__main__':
                 use_contrastive = getattr(opts, 'use_contrastive_loss', False)
                 use_perceptual = getattr(opts, 'perceptual_weight', 0.0) > 0 # Check for perceptual weight
                 
-                if (use_fft or use_contrastive or use_perceptual) and EnhancedLoss is not None:
+                # NEW: Check for Gradient Loss
+                use_gradient = getattr(opts, 'use_gradient_loss', False)
+                
+                if (use_fft or use_contrastive or use_perceptual or use_gradient) and EnhancedLoss is not None:
                     fft_w = opts.fft_weight if use_fft else 0.0
                     cont_w = opts.contrastive_weight if use_contrastive else 0.0
                     perc_w = opts.perceptual_weight
-                    print(f"Using EnhancedLoss -> FFT: {fft_w}, Perceptual: {perc_w}, Contrastive: {cont_w}")
-                    self.criterion = EnhancedLoss(fft_weight=fft_w, perceptual_weight=perc_w, contrastive_weight=cont_w)
+                    grad_w = opts.gradient_weight if use_gradient else 0.0
+                    l1_w = getattr(opts, 'l1_weight', 1.0)
+                    
+                    print(f"Using EnhancedLoss -> L1: {l1_w}, FFT: {fft_w}, Perceptual: {perc_w}, Contrastive: {cont_w}, Gradient: {grad_w}")
+                    self.criterion = EnhancedLoss(
+                        fft_weight=fft_w, 
+                        perceptual_weight=perc_w, 
+                        contrastive_weight=cont_w,
+                        gradient_weight=grad_w,
+                        l1_weight=l1_w
+                    )
                 else:
                     self.criterion = nn.L1Loss()
 
@@ -436,22 +452,28 @@ if __name__ == '__main__':
                 return loss.item()
         
         model = ModelCRNetCrossAttention(opts, device)
-        model = ModelCRNetCrossAttention(opts, device)
     else:
         # Use default RDN model
         model = ModelCRNet(opts)
         
         # Override criterion for RDN model as well
-        if getattr(opts, 'use_fft_loss', False) or getattr(opts, 'use_contrastive_loss', False):
+        # Updated to include Gradient Loss checks
+        if getattr(opts, 'use_fft_loss', False) or getattr(opts, 'use_contrastive_loss', False) or getattr(opts, 'use_gradient_loss', False):
             if EnhancedLoss is not None:
                 fft_w = opts.fft_weight if getattr(opts, 'use_fft_loss', False) else 0.0
                 cont_w = opts.contrastive_weight if getattr(opts, 'use_contrastive_loss', False) else 0.0
+                grad_w = opts.gradient_weight if getattr(opts, 'use_gradient_loss', False) else 0.0
+                l1_w = getattr(opts, 'l1_weight', 1.0)
                 
                 if not is_ddp or local_rank == 0:
-                    print(f"Using EnhancedLoss for RDN -> FFT: {fft_w}, Contrastive: {cont_w}")
-                model.loss_fn = EnhancedLoss(fft_weight=fft_w, contrastive_weight=cont_w)
-
-
+                    print(f"Using EnhancedLoss for RDN -> L1: {l1_w}, FFT: {fft_w}, Contrastive: {cont_w}, Gradient: {grad_w}")
+                
+                model.loss_fn = EnhancedLoss(
+                    fft_weight=fft_w, 
+                    contrastive_weight=cont_w, 
+                    gradient_weight=grad_w,
+                    l1_weight=l1_w
+                )
     
     # Wrap model for multi-GPU
     if is_ddp:
