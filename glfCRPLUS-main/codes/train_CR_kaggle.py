@@ -85,6 +85,7 @@ parser.add_argument('--save_model_dir', type=str, default='/kaggle/working/check
 
 parser.add_argument('--resume_checkpoint', type=str, default=None, help='path to resume checkpoint')
 parser.add_argument('--train_from_scratch', action='store_true', default=True, help='train from scratch')
+parser.add_argument('--reset_state', action='store_true', default=False, help='Reset optimizer, scheduler, and early stopping when resuming')
 
 parser.add_argument('--experiment_name', type=str, default='kaggle_training', help='experiment name')
 parser.add_argument('--notes', type=str, default='', help='additional notes')
@@ -518,13 +519,24 @@ if __name__ == '__main__':
                 state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
         
         model.net_G.load_state_dict(state_dict, strict=False)
-        model.optimizer_G.load_state_dict(checkpoint['optimizer_state_dict'])
-        model.lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
-        if 'best_val_psnr' in checkpoint:
-            best_val_psnr = checkpoint['best_val_psnr']
-        if 'epochs_without_improvement' in checkpoint:
-            epochs_without_improvement = checkpoint['epochs_without_improvement']
+        
+        # Check reset_state flag
+        if getattr(opts, 'reset_state', False):
+            if not is_ddp or local_rank in [-1, 0]:
+                print("⚠️  --reset_state is ON: Resetting optimizer, scheduler, and early stopping counters.")
+                print("   (Keeping starting epoch as updated to avoid overwriting old checkpoints)")
+            # Do NOT load optimizer or scheduler
+            # Reset metrics
+            best_val_psnr = 0.0
+            epochs_without_improvement = 0
+        else:
+            model.optimizer_G.load_state_dict(checkpoint['optimizer_state_dict'])
+            model.lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
+            if 'best_val_psnr' in checkpoint:
+                best_val_psnr = checkpoint['best_val_psnr']
+            if 'epochs_without_improvement' in checkpoint:
+                epochs_without_improvement = checkpoint['epochs_without_improvement']
         
         if not is_ddp or local_rank in [-1, 0]:
             print(f"Resumed from epoch {start_epoch}, best val PSNR: {best_val_psnr:.2f} dB\n")
