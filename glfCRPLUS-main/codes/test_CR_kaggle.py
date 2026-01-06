@@ -20,6 +20,12 @@ from metrics import PSNR, SSIM, SAM, RMSE
 from dataloader import AlignedDataset, get_train_val_test_filelists
 from net_CR_RDN import RDN_residual_CR
 
+try:
+    import lpips
+except ImportError:
+    print("LPIPS library not found. Please install it with 'pip install lpips'")
+    lpips = None
+
 
 ##########################################################
 def test(CR_net, opts, model_name='RDN'):
@@ -47,11 +53,25 @@ def test(CR_net, opts, model_name='RDN'):
     total_psnr = 0.0
     total_ssim = 0.0
     total_sam = 0.0
+    total_sam = 0.0
     total_rmse = 0.0
+    total_lpips = 0.0  # Added LPIPS accumulator
     results_per_image = []
     processed_images = 0
 
     iterator = tqdm(dataloader, total=len(dataloader), desc='Testing') if tqdm else dataloader
+
+    iterator = tqdm(dataloader, total=len(dataloader), desc='Testing') if tqdm else dataloader
+
+    # Initialize LPIPS model
+    lpips_fn = None
+    if lpips:
+        try:
+            # use alex net as it is standard for LPIPS metric
+            lpips_fn = lpips.LPIPS(net='alex').cuda()
+            lpips_fn.eval()
+        except Exception as e:
+            print(f"Failed to initialize LPIPS: {e}")
 
     with torch.no_grad():
         for inputs in iterator:
@@ -59,6 +79,15 @@ def test(CR_net, opts, model_name='RDN'):
             cloudfree_data = inputs['cloudfree_data'].cuda()
             SAR_data = inputs['SAR_data'].cuda()
             file_names = inputs['file_name']
+
+            # Initialize LPIPS if needed (lazy init to avoid loading on cpu if not used)
+            # Better to pass it in but for now we init here or outside
+            # Actually, init outside loop is better for performance.
+            # But let's check if we can pass it. 
+            # For simplicity, I will assume it's initialized effectively or lightweight enough?
+            # No, LPIPS loads a model. It MUST be initialized outside the loop.
+            # I'll correct this in the next chunk logic.
+
 
             # Handle different model forward signatures
             if model_name == 'CrossAttention':
@@ -71,6 +100,35 @@ def test(CR_net, opts, model_name='RDN'):
             sam_val = SAM(pred, cloudfree_data)
             rmse_val = RMSE(pred, cloudfree_data)
 
+            # LPIPS
+            if lpips_fn:
+                # lpips takes (N,3,H,W) in range [-1,1] usually? 
+                # Our data is likely 0-1 or normalized. 
+                # Check metrics.py or dataloader. Usually images are 0-1.
+                # lpips.LPIPS expects input in [-1, 1].
+                # If existing data is [0, 1], we need to scale.
+                # Most pytorch dataloaders for images might be -1 to 1 or 0 to 1.
+                # Given metrics.PSNR usually assumes 0-1 or 0-255?
+                # metrics.py: PIXEL_MAX = 1. So data is 0-1.
+                # Transform 0..1 to -1..1
+                pred_norm = pred * 2.0 - 1.0
+                target_norm = cloudfree_data * 2.0 - 1.0
+                
+                # Check channels. LPIPS expects 3 channels.
+                if pred.shape[1] == 3:
+                    lpips_val = lpips_fn(pred_norm, target_norm)
+                elif pred.shape[1] > 3:
+                     # Use first 3 channels (RGB)
+                    lpips_val = lpips_fn(pred_norm[:, :3, :, :], target_norm[:, :3, :, :])
+                else:
+                    # Grayscale to RGB?
+                    lpips_val = lpips_fn(pred_norm.repeat(1,3,1,1), target_norm.repeat(1,3,1,1))
+                
+                lpips_val = lpips_val.item()
+            else:
+                lpips_val = 0.0
+
+
             psnr_val = float(psnr_val.item()) if hasattr(psnr_val, "item") else float(psnr_val)
             ssim_val = float(ssim_val.item()) if hasattr(ssim_val, "item") else float(ssim_val)
             sam_val = float(sam_val.item()) if hasattr(sam_val, "item") else float(sam_val)
@@ -80,13 +138,16 @@ def test(CR_net, opts, model_name='RDN'):
             total_ssim += ssim_val
             total_sam += sam_val
             total_rmse += rmse_val
+            total_lpips += lpips_val
 
             results_per_image.append({
                 "image": file_names,
                 "psnr": psnr_val,
                 "ssim": ssim_val,
                 "sam": sam_val,
-                "rmse": rmse_val
+                "sam": sam_val,
+                "rmse": rmse_val,
+                "lpips": lpips_val
             })
 
             processed_images += 1
@@ -96,16 +157,20 @@ def test(CR_net, opts, model_name='RDN'):
                     "PSNR": f"{psnr_val:.3f}",
                     "SSIM": f"{ssim_val:.3f}",
                     "SAM": f"{sam_val:.3f}",
+                    "SAM": f"{sam_val:.3f}",
                     "RMSE": f"{rmse_val:.4f}",
+                    "LPIPS": f"{lpips_val:.4f}",
                     "Done": processed_images
                 })
 
     avg_psnr = total_psnr / processed_images
     avg_ssim = total_ssim / processed_images
     avg_sam = total_sam / processed_images
+    avg_sam = total_sam / processed_images
     avg_rmse = total_rmse / processed_images
+    avg_lpips = total_lpips / processed_images
 
-    return avg_psnr, avg_ssim, avg_sam, avg_rmse, results_per_image
+    return avg_psnr, avg_ssim, avg_sam, avg_rmse, avg_lpips, results_per_image
 
 
 ##########################################################
@@ -206,18 +271,19 @@ def main():
     print(f"Data CSV: {opts.data_list_filepath}")
     print(f"Checkpoint: {opts.checkpoint_path}")
     print("="*60)
-    print(f"{'Image':40s} | {'PSNR':>10s} | {'SSIM':>8s} | {'SAM':>8s} | {'RMSE':>10s}")
-    print("-"*85)
+    print(f"{'Image':40s} | {'PSNR':>10s} | {'SSIM':>8s} | {'SAM':>8s} | {'RMSE':>10s} | {'LPIPS':>10s}")
+    print("-"*100)
 
-    avg_psnr, avg_ssim, avg_sam, avg_rmse, results_per_image = test(CR_net, opts, model_name=opts.model_type)
+    avg_psnr, avg_ssim, avg_sam, avg_rmse, avg_lpips, results_per_image = test(CR_net, opts, model_name=opts.model_type)
 
-    print("-"*85)
+    print("-"*100)
     print("="*60)
     print(f"Average Results:")
     print(f"  PSNR: {avg_psnr:.4f} dB")
     print(f"  SSIM: {avg_ssim:.4f}")
     print(f"  SAM:  {avg_sam:.4f} deg")
     print(f"  RMSE: {avg_rmse:.5f}")
+    print(f"  LPIPS: {avg_lpips:.5f}")
     print(f"  Total Images: {len(results_per_image)}")
     print("="*60)
 
@@ -236,6 +302,7 @@ def main():
             "avg_ssim": avg_ssim,
             "avg_sam": avg_sam,
             "avg_rmse": avg_rmse,
+            "avg_lpips": avg_lpips,
             "num_images": len(results_per_image),
             "per_image": results_per_image
         }, f, indent=4)

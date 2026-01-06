@@ -41,3 +41,5 @@ opencv-python>=4.5.0
 # Development tools (optional)
 pytest>=7.0.0
 black>=22.0.0
+# Perceptual metric
+lpips>=0.1.4
