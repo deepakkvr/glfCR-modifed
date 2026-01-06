@@ -59,9 +59,8 @@ def test(CR_net, opts, model_name='RDN'):
     results_per_image = []
     processed_images = 0
 
-    iterator = tqdm(dataloader, total=len(dataloader), desc='Testing') if tqdm else dataloader
-
-    iterator = tqdm(dataloader, total=len(dataloader), desc='Testing') if tqdm else dataloader
+    # Use mininterval to avoid spamming logs in Kaggle
+    iterator = tqdm(dataloader, total=len(dataloader), desc='Testing', mininterval=10.0) if tqdm else dataloader
 
     # Initialize LPIPS model
     lpips_fn = None
@@ -271,9 +270,7 @@ def main():
     print(f"Data CSV: {opts.data_list_filepath}")
     print(f"Checkpoint: {opts.checkpoint_path}")
     print("="*60)
-    print(f"{'Image':40s} | {'PSNR':>10s} | {'SSIM':>8s} | {'SAM':>8s} | {'RMSE':>10s} | {'LPIPS':>10s}")
-    print("-"*100)
-
+    
     avg_psnr, avg_ssim, avg_sam, avg_rmse, avg_lpips, results_per_image = test(CR_net, opts, model_name=opts.model_type)
 
     print("-"*100)

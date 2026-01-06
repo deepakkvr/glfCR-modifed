@@ -20,6 +20,12 @@ from metrics import PSNR, SSIM, SAM, RMSE
 from dataloader import AlignedDataset, get_train_val_test_filelists
 from net_CR_RDN import RDN_residual_CR
 
+try:
+    import lpips
+except ImportError:
+    print("LPIPS library not found. Please install it with 'pip install lpips'")
+    lpips = None
+
 
 ##########################################################
 def test(CR_net, opts):
@@ -46,11 +52,23 @@ def test(CR_net, opts):
     total_psnr = 0.0
     total_ssim = 0.0
     total_sam = 0.0
+    total_sam = 0.0
     total_rmse = 0.0
+    total_lpips = 0.0
     results_per_image = []
     processed_images = 0
 
-    iterator = tqdm(dataloader, total=len(dataloader), desc='Testing') if tqdm else dataloader
+    # Use mininterval to avoid spamming logs in Kaggle
+    iterator = tqdm(dataloader, total=len(dataloader), desc='Testing', mininterval=10.0) if tqdm else dataloader
+
+    # Initialize LPIPS model
+    lpips_fn = None
+    if lpips:
+        try:
+            lpips_fn = lpips.LPIPS(net='alex').cuda()
+            lpips_fn.eval()
+        except Exception as e:
+            print(f"Failed to initialize LPIPS: {e}")
 
     with torch.no_grad():
         for inputs in iterator:
@@ -67,6 +85,20 @@ def test(CR_net, opts):
             sam_val = SAM(pred, cloudfree_data)
             rmse_val = RMSE(pred, cloudfree_data)
 
+            # LPIPS
+            if lpips_fn:
+                pred_norm = pred * 2.0 - 1.0
+                target_norm = cloudfree_data * 2.0 - 1.0
+                if pred.shape[1] == 3:
+                    lpips_val = lpips_fn(pred_norm, target_norm)
+                elif pred.shape[1] > 3:
+                    lpips_val = lpips_fn(pred_norm[:, :3, :, :], target_norm[:, :3, :, :])
+                else:
+                    lpips_val = lpips_fn(pred_norm.repeat(1,3,1,1), target_norm.repeat(1,3,1,1))
+                lpips_val = lpips_val.item()
+            else:
+                lpips_val = 0.0
+
             psnr_val = float(psnr_val.item()) if hasattr(psnr_val, "item") else float(psnr_val)
             ssim_val = float(ssim_val.item()) if hasattr(ssim_val, "item") else float(ssim_val)
             sam_val = float(sam_val.item()) if hasattr(sam_val, "item") else float(sam_val)
@@ -75,14 +107,18 @@ def test(CR_net, opts):
             total_psnr += psnr_val
             total_ssim += ssim_val
             total_sam += sam_val
+            total_sam += sam_val
             total_rmse += rmse_val
+            total_lpips += lpips_val
 
             results_per_image.append({
                 "image": file_names,
                 "psnr": psnr_val,
                 "ssim": ssim_val,
                 "sam": sam_val,
-                "rmse": rmse_val
+                "sam": sam_val,
+                "rmse": rmse_val,
+                "lpips": lpips_val
             })
 
             processed_images += 1
@@ -92,16 +128,20 @@ def test(CR_net, opts):
                     "PSNR": f"{psnr_val:.3f}",
                     "SSIM": f"{ssim_val:.3f}",
                     "SAM": f"{sam_val:.3f}",
+                    "SAM": f"{sam_val:.3f}",
                     "RMSE": f"{rmse_val:.4f}",
+                    "LPIPS": f"{lpips_val:.4f}",
                     "Done": processed_images
                 })
 
     avg_psnr = total_psnr / processed_images
     avg_ssim = total_ssim / processed_images
     avg_sam = total_sam / processed_images
+    avg_sam = total_sam / processed_images
     avg_rmse = total_rmse / processed_images
+    avg_lpips = total_lpips / processed_images
 
-    return avg_psnr, avg_ssim, avg_sam, avg_rmse, results_per_image
+    return avg_psnr, avg_ssim, avg_sam, avg_rmse, avg_lpips, results_per_image
 
 
 ##########################################################
@@ -185,18 +225,17 @@ def main():
     print(f"Input Data: {opts.input_data_folder}")
     print(f"Data CSV: {opts.data_list_filepath}")
     print("="*60)
-    print(f"{'Image':40s} | {'PSNR':>10s} | {'SSIM':>8s} | {'SAM':>8s} | {'RMSE':>10s}")
-    print("-"*85)
     
-    avg_psnr, avg_ssim, avg_sam, avg_rmse, results_per_image = test(CR_net, opts)
+    avg_psnr, avg_ssim, avg_sam, avg_rmse, avg_lpips, results_per_image = test(CR_net, opts)
 
-    print("-"*85)
+    print("-"*100)
     print("="*60)
     print(f"Average Results (BASELINE):")
     print(f"  PSNR: {avg_psnr:.4f} dB")
     print(f"  SSIM: {avg_ssim:.4f}")
     print(f"  SAM:  {avg_sam:.4f} deg")
     print(f"  RMSE: {avg_rmse:.5f}")
+    print(f"  LPIPS: {avg_lpips:.5f}")
     print(f"  Total Images: {len(results_per_image)}")
     print("="*60)
 
@@ -215,6 +254,7 @@ def main():
             "avg_ssim": avg_ssim,
             "avg_sam": avg_sam,
             "avg_rmse": avg_rmse,
+            "avg_lpips": avg_lpips,
             "num_images": len(results_per_image),
             "per_image": results_per_image
         }, f, indent=4)
