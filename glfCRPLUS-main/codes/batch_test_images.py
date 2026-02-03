@@ -9,9 +9,17 @@ For each image:
 3.  Saves the Cloud-Free output, RGB visualization, and Metrics in that folder.
 
 Usage:
+    # For Reference/Ours Model
     python codes/batch_test_images.py --csv_path /kaggle/working/test.csv \
-                                      --ours_checkpoint /kaggle/input/glf-cr-plus/checkpoints/best_model.pth \
-                                      --output_root "Test Images"
+                                      --checkpoint /kaggle/input/glf-cr-plus/checkpoints/best_model.pth \
+                                      --output_root "Test Images" \
+                                      --model_type cross
+
+    # For Base Model
+    python codes/batch_test_images.py --csv_path /kaggle/working/test.csv \
+                                      --checkpoint /kaggle/input/base-model/checkpoints/base.pth \
+                                      --output_root "Test Images_Base" \
+                                      --model_type base
 """
 
 import os
@@ -43,8 +51,9 @@ def get_root_by_type(dataset_type):
     # Fallback/Default
     return WINTER_ROOT
 
-def process_batch(csv_path, checkpoint_path, output_root, limit=None, device='cuda'):
+def process_batch(csv_path, checkpoint_path, output_root, limit=None, device='cuda', model_type='cross'):
     print(f"Reading CSV: {csv_path}")
+    print(f"Model Type: {model_type}")
     
     if not os.path.exists(csv_path):
         print(f"Error: CSV file not found: {csv_path}")
@@ -105,11 +114,6 @@ def process_batch(csv_path, checkpoint_path, output_root, limit=None, device='cu
             # e.g. Test Images/ROIs2017_winter_s2_cloudy_12_p30/
             img_output_dir = os.path.join(output_root, image_name)
             
-            # Run Inference
-            # We suppress stdout slightly to keep tqdm clean, but test_single_image prints a lot.
-            # We'll just print a header.
-            # print(f"\n[{i+1}/{len(rows)}] Processing: {image_name}")
-            
             test_single_image(
                 image_path=str(optical_path),
                 model_checkpoint=checkpoint_path,
@@ -117,7 +121,7 @@ def process_batch(csv_path, checkpoint_path, output_root, limit=None, device='cu
                 sar_path=str(sar_path),
                 cloudfree_path=str(gt_path), # Provide GT so metrics are calculated!
                 device=device,
-                model_type='cross' # Checking Your Model (Use 'base' if testing baseline)
+                model_type=model_type # Passed from argument
             )
             
             success_count += 1
@@ -141,7 +145,9 @@ if __name__ == "__main__":
     parser.add_argument('--output_root', type=str, default='Test Images', help='Root folder for outputs')
     parser.add_argument('--limit', type=int, default=None, help='Limit number of images for testing')
     parser.add_argument('--device', type=str, default='cuda')
+    parser.add_argument('--model_type', type=str, default='cross', choices=['cross', 'base'], 
+                        help='Model type: "cross" (Ours) or "base" (Baseline)')
     
     args = parser.parse_args()
     
-    process_batch(args.csv_path, args.checkpoint, args.output_root, args.limit, args.device)
+    process_batch(args.csv_path, args.checkpoint, args.output_root, args.limit, args.device, args.model_type)
