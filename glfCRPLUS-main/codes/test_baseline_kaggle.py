@@ -28,12 +28,11 @@ except ImportError:
 
 
 ##########################################################
-def test(CR_net, opts, model_name='RDN'):
+def test(CR_net, opts):
     """Test the model
     Args:
         CR_net: The model to test
         opts: Configuration options
-        model_name: 'RDN' or 'CrossAttention'
     """
     _, _, test_filelist = get_train_val_test_filelists(opts.data_list_filepath)
 
@@ -55,7 +54,7 @@ def test(CR_net, opts, model_name='RDN'):
     total_sam = 0.0
     total_sam = 0.0
     total_rmse = 0.0
-    total_lpips = 0.0  # Added LPIPS accumulator
+    total_lpips = 0.0
     results_per_image = []
     processed_images = 0
 
@@ -66,7 +65,6 @@ def test(CR_net, opts, model_name='RDN'):
     lpips_fn = None
     if lpips:
         try:
-            # use alex net as it is standard for LPIPS metric
             lpips_fn = lpips.LPIPS(net='alex').cuda()
             lpips_fn.eval()
         except Exception as e:
@@ -79,20 +77,8 @@ def test(CR_net, opts, model_name='RDN'):
             SAR_data = inputs['SAR_data'].cuda()
             file_names = inputs['file_name']
 
-            # Initialize LPIPS if needed (lazy init to avoid loading on cpu if not used)
-            # Better to pass it in but for now we init here or outside
-            # Actually, init outside loop is better for performance.
-            # But let's check if we can pass it. 
-            # For simplicity, I will assume it's initialized effectively or lightweight enough?
-            # No, LPIPS loads a model. It MUST be initialized outside the loop.
-            # I'll correct this in the next chunk logic.
-
-
-            # Handle different model forward signatures
-            if model_name == 'CrossAttention':
-                pred = CR_net(cloudy_data, SAR_data)
-            else:
-                pred = CR_net(cloudy_data, SAR_data)
+            # Baseline Forward Pass (Standard RDN)
+            pred = CR_net(cloudy_data, SAR_data)
 
             psnr_val = PSNR(pred, cloudfree_data)
             ssim_val = SSIM(pred, cloudfree_data)
@@ -101,32 +87,17 @@ def test(CR_net, opts, model_name='RDN'):
 
             # LPIPS
             if lpips_fn:
-                # lpips takes (N,3,H,W) in range [-1,1] usually? 
-                # Our data is likely 0-1 or normalized. 
-                # Check metrics.py or dataloader. Usually images are 0-1.
-                # lpips.LPIPS expects input in [-1, 1].
-                # If existing data is [0, 1], we need to scale.
-                # Most pytorch dataloaders for images might be -1 to 1 or 0 to 1.
-                # Given metrics.PSNR usually assumes 0-1 or 0-255?
-                # metrics.py: PIXEL_MAX = 1. So data is 0-1.
-                # Transform 0..1 to -1..1
                 pred_norm = pred * 2.0 - 1.0
                 target_norm = cloudfree_data * 2.0 - 1.0
-                
-                # Check channels. LPIPS expects 3 channels.
                 if pred.shape[1] == 3:
                     lpips_val = lpips_fn(pred_norm, target_norm)
                 elif pred.shape[1] > 3:
-                     # Use first 3 channels (RGB)
                     lpips_val = lpips_fn(pred_norm[:, :3, :, :], target_norm[:, :3, :, :])
                 else:
-                    # Grayscale to RGB?
                     lpips_val = lpips_fn(pred_norm.repeat(1,3,1,1), target_norm.repeat(1,3,1,1))
-                
                 lpips_val = lpips_val.item()
             else:
                 lpips_val = 0.0
-
 
             psnr_val = float(psnr_val.item()) if hasattr(psnr_val, "item") else float(psnr_val)
             ssim_val = float(ssim_val.item()) if hasattr(ssim_val, "item") else float(ssim_val)
@@ -135,6 +106,7 @@ def test(CR_net, opts, model_name='RDN'):
 
             total_psnr += psnr_val
             total_ssim += ssim_val
+            total_sam += sam_val
             total_sam += sam_val
             total_rmse += rmse_val
             total_lpips += lpips_val
@@ -175,25 +147,20 @@ def test(CR_net, opts, model_name='RDN'):
 ##########################################################
 def main():
     parser = argparse.ArgumentParser()
-
-    parser.add_argument('--model_type', type=str, default='RDN',
-                        choices=['RDN', 'CrossAttention'],
-                        help='Model type to test')
+    # Simplified arguments for Baseline Script
     parser.add_argument('--batch_sz', type=int, default=1)
     parser.add_argument('--num_workers', type=int, default=0)
-
     parser.add_argument('--load_size', type=int, default=256)
     parser.add_argument('--crop_size', type=int, default=128)
     parser.add_argument('--input_data_folder', type=str, default='/kaggle/input/sen12ms-cr-winter')
     parser.add_argument('--data_list_filepath', type=str, default='/kaggle/working/data.csv')
-    parser.add_argument('--checkpoint_path', type=str, default='/kaggle/input/checkpoint3/pytorch/default/1/checkpoint_epoch_2.pth')
+    parser.add_argument('--checkpoint_path', type=str, required=True)
 
+    # Dataset flags
     parser.add_argument('--is_test', type=bool, default=True)
     parser.add_argument('--is_use_cloudmask', type=bool, default=False)
     parser.add_argument('--cloud_threshold', type=float, default=0.2)
-
-    parser.add_argument('--model_name', type=str, default='baseline')
-    parser.add_argument('--notes', type=str, default='')
+    parser.add_argument('--model_name', type=str, default='Baseline_CRNet')
 
     opts = parser.parse_args()
 
@@ -209,73 +176,61 @@ def main():
             opts.data_list_filepath = input_csv
         else:
             raise FileNotFoundError("No CSV available")
-    else:
-        if not os.path.exists(opts.data_list_filepath):
-            raise FileNotFoundError(f"CSV not found: {opts.data_list_filepath}")
 
-    # Model
+    # Model Initialization (BASELINE RDN)
     print("="*60)
     print("Using single GPU (DataParallel disabled)")
+    print(f"Initializing Baseline RDN_residual_CR...")
     print("="*60)
-
-    # Load model based on type
-    # Load checkpoint FIRST to determine model type
-    print(f"Loading checkpoint: {opts.checkpoint_path}")
-    try:
-        checkpoint = torch.load(
-            opts.checkpoint_path,
-            map_location="cuda",
-            weights_only=False     # REQUIRED FIX for PyTorch 2.6
-        )
-    except Exception as e:
-        print(f"Error loading checkpoint: {e}")
-        return
-
-    if "model_state_dict" in checkpoint:
-        state_dict = checkpoint["model_state_dict"]
-    elif "network" in checkpoint:
-        state_dict = checkpoint["network"]
-    else:
-        state_dict = checkpoint
-
-    # Auto-detect model type from keys
-    if opts.model_type == 'RDN':  # Only check if default or user specified RDN (to allow override if needed)
-        # Check for CrossAttention specific keys
-        has_optical = any('optical_encoder' in k for k in state_dict.keys())
-        has_cross = any('cross_attn' in k for k in state_dict.keys())
-        
-        if has_optical or has_cross:
-            print("INFO: Auto-detected CrossAttention keys in checkpoint. Switching model_type to 'CrossAttention'.")
-            opts.model_type = 'CrossAttention'
-        else:
-            print("INFO: Detected RDN keys (or no CrossAttention keys). Using 'RDN' model.")
-
-    # Load model based on type (or auto-detected type)
-    if opts.model_type == 'CrossAttention':
-        from net_CR_CrossAttention import CloudRemovalCrossAttention
-        CR_net = CloudRemovalCrossAttention().cuda()
-    else:
-        # Default RDN model
-        CR_net = RDN_residual_CR(opts.crop_size).cuda()
+    
+    # We explicitly turn off cross_attn in case default changed
+    CR_net = RDN_residual_CR(opts.crop_size, use_cross_attn=False).cuda()
     
     CR_net.eval()
     for p in CR_net.parameters():
         p.requires_grad = False
 
-    CR_net.load_state_dict(state_dict, strict=False)
+    # Load checkpoint safely (FIXING THE KEY WRAPPING ISSUE)
+    print(f"Loading checkpoint: {opts.checkpoint_path}")
+    checkpoint = torch.load(
+        opts.checkpoint_path,
+        map_location="cuda",
+        weights_only=False     # REQUIRED FIX for PyTorch 2.6
+    )
+
+    # Handle various dictionary structures
+    if "model_state_dict" in checkpoint:
+        state_dict = checkpoint["model_state_dict"]
+    elif "network" in checkpoint:
+        print("Found 'network' key wrapper - Unwraping...")
+        state_dict = checkpoint["network"]
+    else:
+        state_dict = checkpoint
+
+    # Handle module. prefix
+    if any(k.startswith('module.') for k in state_dict.keys()):
+         state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+
+    # Load Weights
+    try:
+        CR_net.load_state_dict(state_dict, strict=True)
+        print("✓ Loaded weights successfully (Strict mode)")
+    except Exception as e:
+        print(f"Warning: Strict loading failed ({e}). Trying strict=False...")
+        CR_net.load_state_dict(state_dict, strict=False)
+        print("✓ Loaded weights (Relaxed mode)")
 
     print("="*60)
-    print(f"Testing Model: {opts.model_type} - {opts.model_name}")
+    print(f"Testing Model: BASELINE RDN")
     print(f"Input Data: {opts.input_data_folder}")
     print(f"Data CSV: {opts.data_list_filepath}")
-    print(f"Checkpoint: {opts.checkpoint_path}")
     print("="*60)
     
-    avg_psnr, avg_ssim, avg_sam, avg_rmse, avg_lpips, results_per_image = test(CR_net, opts, model_name=opts.model_type)
+    avg_psnr, avg_ssim, avg_sam, avg_rmse, avg_lpips, results_per_image = test(CR_net, opts)
 
     print("-"*100)
     print("="*60)
-    print(f"Average Results:")
+    print(f"Average Results (BASELINE):")
     print(f"  PSNR: {avg_psnr:.4f} dB")
     print(f"  SSIM: {avg_ssim:.4f}")
     print(f"  SAM:  {avg_sam:.4f} deg")
@@ -285,16 +240,16 @@ def main():
     print("="*60)
 
     # Save results
-    results_dir = '/kaggle/working/results'
+    results_dir = '/kaggle/working/results_baseline'
     os.makedirs(results_dir, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    out_json = os.path.join(results_dir, f"results_{opts.model_name}_{timestamp}.json")
+    out_json = os.path.join(results_dir, f"results_baseline_{timestamp}.json")
     with open(out_json, "w") as f:
         json.dump({
             "timestamp": timestamp,
-            "model": opts.model_name,
+            "model": "Baseline_CRNet",
             "avg_psnr": avg_psnr,
             "avg_ssim": avg_ssim,
             "avg_sam": avg_sam,

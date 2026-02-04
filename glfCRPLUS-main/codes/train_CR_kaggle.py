@@ -55,11 +55,16 @@ parser.add_argument('--cloud_threshold', type=float, default=0.2)
 parser.add_argument('--is_test', type=bool, default=False, help='whether in test mode')
 
 # Enhancement arguments
-parser.add_argument('--use_cross_attn', action='store_true', default=True, help='Use Cross-Modal Attention in RDN')
+parser.add_argument('--use_cross_attn', action='store_true', default=False, help='Use Cross-Modal Attention in RDN')
 parser.add_argument('--use_fft_loss', action='store_true', default=True, help='Use Frequency Domain Loss')
-parser.add_argument('--fft_weight', type=float, default=0.1, help='Weight for FFT loss')
+parser.add_argument('--fft_weight', type=float, default=0.5, help='Weight for FFT loss')
 parser.add_argument('--use_contrastive_loss', action='store_true', default=True, help='Use Contrastive Loss')
-parser.add_argument('--contrastive_weight', type=float, default=0.05, help='Weight for Contrastive loss')
+parser.add_argument('--contrastive_weight', type=float, default=0.1, help='Weight for Contrastive loss')
+parser.add_argument('--perceptual_weight', type=float, default=1.0, help='Weight for Perceptual (VGG) loss')
+# NEW: Texture & Gradient controls
+parser.add_argument('--use_gradient_loss', action='store_true', default=True, help='Use Gradient (Edge-Aware) Loss')
+parser.add_argument('--gradient_weight', type=float, default=0.1, help='Weight for Gradient loss')
+parser.add_argument('--l1_weight', type=float, default=1.0, help='Weight for L1 (Pixel) loss. Lower this to reduce smoothing.')
 
 
 
@@ -80,6 +85,7 @@ parser.add_argument('--save_model_dir', type=str, default='/kaggle/working/check
 
 parser.add_argument('--resume_checkpoint', type=str, default=None, help='path to resume checkpoint')
 parser.add_argument('--train_from_scratch', action='store_true', default=True, help='train from scratch')
+parser.add_argument('--reset_state', action='store_true', default=False, help='Reset optimizer, scheduler, and early stopping when resuming')
 
 parser.add_argument('--experiment_name', type=str, default='kaggle_training', help='experiment name')
 parser.add_argument('--notes', type=str, default='', help='additional notes')
@@ -88,6 +94,11 @@ parser.add_argument('--use_ddp', action='store_true', default=False, help='Use D
 parser.add_argument('--local_rank', type=int, default=-1, help='Local rank for distributed training')
 
 opts = parser.parse_args()
+
+# SAFETY LOGIC: Automatically enable Cross-Attention if model_name implies it
+if opts.model_name == 'CrossAttention':
+    opts.use_cross_attn = True
+    print("Auto-enabling Cross-Attention because model_name='CrossAttention'")
 
 ##===================================================##
 ##************** Training functions *****************##
@@ -378,12 +389,26 @@ if __name__ == '__main__':
                 # Use EnhancedLoss if requested
                 use_fft = getattr(opts, 'use_fft_loss', False)
                 use_contrastive = getattr(opts, 'use_contrastive_loss', False)
+                use_perceptual = getattr(opts, 'perceptual_weight', 0.0) > 0 # Check for perceptual weight
                 
-                if (use_fft or use_contrastive) and EnhancedLoss is not None:
+                # NEW: Check for Gradient Loss
+                use_gradient = getattr(opts, 'use_gradient_loss', False)
+                
+                if (use_fft or use_contrastive or use_perceptual or use_gradient) and EnhancedLoss is not None:
                     fft_w = opts.fft_weight if use_fft else 0.0
                     cont_w = opts.contrastive_weight if use_contrastive else 0.0
-                    print(f"Using EnhancedLoss -> FFT: {fft_w}, Contrastive: {cont_w}")
-                    self.criterion = EnhancedLoss(fft_weight=fft_w, contrastive_weight=cont_w)
+                    perc_w = opts.perceptual_weight
+                    grad_w = opts.gradient_weight if use_gradient else 0.0
+                    l1_w = getattr(opts, 'l1_weight', 1.0)
+                    
+                    print(f"Using EnhancedLoss -> L1: {l1_w}, FFT: {fft_w}, Perceptual: {perc_w}, Contrastive: {cont_w}, Gradient: {grad_w}")
+                    self.criterion = EnhancedLoss(
+                        fft_weight=fft_w, 
+                        perceptual_weight=perc_w, 
+                        contrastive_weight=cont_w,
+                        gradient_weight=grad_w,
+                        l1_weight=l1_w
+                    )
                 else:
                     self.criterion = nn.L1Loss()
 
@@ -433,22 +458,28 @@ if __name__ == '__main__':
                 return loss.item()
         
         model = ModelCRNetCrossAttention(opts, device)
-        model = ModelCRNetCrossAttention(opts, device)
     else:
         # Use default RDN model
         model = ModelCRNet(opts)
         
         # Override criterion for RDN model as well
-        if getattr(opts, 'use_fft_loss', False) or getattr(opts, 'use_contrastive_loss', False):
+        # Updated to include Gradient Loss checks
+        if getattr(opts, 'use_fft_loss', False) or getattr(opts, 'use_contrastive_loss', False) or getattr(opts, 'use_gradient_loss', False):
             if EnhancedLoss is not None:
                 fft_w = opts.fft_weight if getattr(opts, 'use_fft_loss', False) else 0.0
                 cont_w = opts.contrastive_weight if getattr(opts, 'use_contrastive_loss', False) else 0.0
+                grad_w = opts.gradient_weight if getattr(opts, 'use_gradient_loss', False) else 0.0
+                l1_w = getattr(opts, 'l1_weight', 1.0)
                 
                 if not is_ddp or local_rank == 0:
-                    print(f"Using EnhancedLoss for RDN -> FFT: {fft_w}, Contrastive: {cont_w}")
-                model.loss_fn = EnhancedLoss(fft_weight=fft_w, contrastive_weight=cont_w)
-
-
+                    print(f"Using EnhancedLoss for RDN -> L1: {l1_w}, FFT: {fft_w}, Contrastive: {cont_w}, Gradient: {grad_w}")
+                
+                model.loss_fn = EnhancedLoss(
+                    fft_weight=fft_w, 
+                    contrastive_weight=cont_w, 
+                    gradient_weight=grad_w,
+                    l1_weight=l1_w
+                )
     
     # Wrap model for multi-GPU
     if is_ddp:
@@ -493,13 +524,24 @@ if __name__ == '__main__':
                 state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
         
         model.net_G.load_state_dict(state_dict, strict=False)
-        model.optimizer_G.load_state_dict(checkpoint['optimizer_state_dict'])
-        model.lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
-        if 'best_val_psnr' in checkpoint:
-            best_val_psnr = checkpoint['best_val_psnr']
-        if 'epochs_without_improvement' in checkpoint:
-            epochs_without_improvement = checkpoint['epochs_without_improvement']
+        
+        # Check reset_state flag
+        if getattr(opts, 'reset_state', False):
+            if not is_ddp or local_rank in [-1, 0]:
+                print("⚠️  --reset_state is ON: Resetting optimizer, scheduler, and early stopping counters.")
+                print("   (Keeping starting epoch as updated to avoid overwriting old checkpoints)")
+            # Do NOT load optimizer or scheduler
+            # Reset metrics
+            best_val_psnr = 0.0
+            epochs_without_improvement = 0
+        else:
+            model.optimizer_G.load_state_dict(checkpoint['optimizer_state_dict'])
+            model.lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
+            if 'best_val_psnr' in checkpoint:
+                best_val_psnr = checkpoint['best_val_psnr']
+            if 'epochs_without_improvement' in checkpoint:
+                epochs_without_improvement = checkpoint['epochs_without_improvement']
         
         if not is_ddp or local_rank in [-1, 0]:
             print(f"Resumed from epoch {start_epoch}, best val PSNR: {best_val_psnr:.2f} dB\n")

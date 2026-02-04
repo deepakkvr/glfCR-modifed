@@ -70,3 +70,52 @@ def PSNR(img1, img2, mask=None):
         return 0.0
     
     return psnr_value
+
+def RMSE(img1, img2):
+    """
+    Calculate Root Mean Square Error (RMSE) using PyTorch.
+    img1, img2: (B, C, H, W) tensors
+    """
+    mse = torch.mean((img1 - img2) ** 2)
+    rmse = torch.sqrt(mse)
+    return rmse
+
+def SAM(img1, img2):
+    """
+    Calculate Spectral Angle Mapper (SAM) using PyTorch.
+    img1, img2: (B, C, H, W) tensors, values should be normalized (typically 0-1)
+    """
+    # Flatten spatial dimensions: (B, C, H, W) -> (B, C, N)
+    b, c, h, w = img1.shape
+    img1_flat = img1.view(b, c, -1)
+    img2_flat = img2.view(b, c, -1)
+    
+    # Calculate dot product along channel dimension
+    # sum(A * B, dim=1) -> (B, N)
+    dot_product = torch.sum(img1_flat * img2_flat, dim=1)
+    
+    # Calculate norms
+    norm1 = torch.norm(img1_flat, dim=1)
+    norm2 = torch.norm(img2_flat, dim=1)
+    
+    # Avoid division by zero
+    valid_mask = (norm1 > 1e-8) & (norm2 > 1e-8)
+    
+    # Cosine of the angle
+    # Clip cos_theta to [-1, 1] to avoid NaNs in acos due to precision errors
+    cos_theta = dot_product / (norm1 * norm2 + 1e-10)
+    cos_theta = torch.clamp(cos_theta, -1.0, 1.0)
+    
+    # Angle in radians
+    angles_rad = torch.acos(cos_theta)
+    
+    # Convert to degrees
+    angles_deg = torch.rad2deg(angles_rad)
+    
+    # Return mean SAM for the batch (masked)
+    if valid_mask.sum() > 0:
+        sam_val = angles_deg[valid_mask].mean()
+    else:
+        sam_val = torch.tensor(0.0).to(img1.device)
+        
+    return sam_val
