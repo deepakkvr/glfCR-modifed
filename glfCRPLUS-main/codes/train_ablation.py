@@ -54,7 +54,9 @@ parser.add_argument('--variant', type=str, required=True,
 
 # Checkpoint and data paths
 parser.add_argument('--pretrained_path', type=str, required=True,
-                    help='Path to pretrained original model checkpoint')
+                    help='Path to pretrained checkpoint (for initial training or resuming)')
+parser.add_argument('--resume', action='store_true',
+                    help='Resume training from pretrained_path checkpoint (loads optimizer state, epoch counter, etc.)')
 parser.add_argument('--input_data_folder', type=str, default='../data')
 parser.add_argument('--data_list_filepath', type=str, default='../data/data.csv')
 
@@ -68,7 +70,7 @@ parser.add_argument('--optimizer', type=str, default='Adam', help='Adam optimize
 parser.add_argument('--lr', type=float, default=1e-4, help='learning rate (reduced for fine-tuning)')
 parser.add_argument('--lr_step', type=int, default=5, help='lr decay step')
 parser.add_argument('--lr_start_epoch_decay', type=int, default=10, help='epoch to start lr decay')
-parser.add_argument('--max_epochs', type=int, default=15, help='maximum training epochs')
+parser.add_argument('--additional_epochs', type=int, default=15, help='number of additional epochs to train')
 parser.add_argument('--save_freq', type=int, default=5, help='save checkpoint every N epochs')
 parser.add_argument('--save_model_dir', type=str, default='./checkpoints/ablation', help='checkpoint directory')
 
@@ -138,13 +140,23 @@ def freeze_modules(model, variant):
         print("✓ Trainable modules: sar_denoiser, refinement")
 
 
-def load_pretrained_checkpoint(model, checkpoint_path, variant):
+def load_pretrained_checkpoint(model, checkpoint_path, variant, resume=False):
     """
     Load pretrained checkpoint with selective loading.
-    Only load weights for shared modules (encoders, cross-attention, decoder).
-    Initialize new modules (denoiser/gating) with random weights.
+    
+    Args:
+        model: The model to load weights into
+        checkpoint_path: Path to checkpoint file
+        variant: Model variant ('original', 'no_denoising', 'full_denoising')
+        resume: If True, return optimizer/scheduler state for resuming training
+    
+    Returns:
+        If resume=False: model
+        If resume=True: (model, optimizer_state, scheduler_state, start_epoch, best_val_psnr)
     """
-    print(f"\nLoading pretrained checkpoint: {checkpoint_path}")
+    print(f"\nLoading checkpoint: {checkpoint_path}")
+    print(f"Mode: {'RESUME TRAINING' if resume else 'LOAD WEIGHTS ONLY'}")
+    
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     
     # Extract model state dict
@@ -175,6 +187,18 @@ def load_pretrained_checkpoint(model, checkpoint_path, variant):
         print(f"⚠ Skipped {len(skipped_keys)} incompatible keys (will be initialized randomly)")
         if variant == 'full_denoising':
             print("  (This is expected for 'full_denoising' variant - sar_denoiser is new)")
+    
+    # If resuming, extract training state
+    if resume:
+        optimizer_state = checkpoint.get('optimizer_state_dict', None)
+        scheduler_state = checkpoint.get('lr_scheduler_state_dict', None)
+        start_epoch = checkpoint.get('epoch', 0) + 1  # Continue from next epoch
+        best_val_psnr = checkpoint.get('best_val_psnr', 0.0)
+        
+        print(f"\n✓ Resuming from epoch {start_epoch}")
+        print(f"✓ Best validation PSNR so far: {best_val_psnr:.2f} dB")
+        
+        return model, optimizer_state, scheduler_state, start_epoch, best_val_psnr
     
     return model
 
@@ -334,13 +358,24 @@ if __name__ == '__main__':
     # Create model based on variant
     model = get_model(opts.variant)
     
-    # Load pretrained checkpoint (selective loading)
-    model = load_pretrained_checkpoint(model, opts.pretrained_path, opts.variant)
+    # Load checkpoint (either for initial training or resuming)
+    start_epoch = 0
+    best_val_psnr = 0.0
+    optimizer_state = None
+    scheduler_state = None
+    
+    if opts.resume:
+        # Resume training: load everything
+        model, optimizer_state, scheduler_state, start_epoch, best_val_psnr = \
+            load_pretrained_checkpoint(model, opts.pretrained_path, opts.variant, resume=True)
+    else:
+        # Initial training: load weights only
+        model = load_pretrained_checkpoint(model, opts.pretrained_path, opts.variant, resume=False)
     
     # Move model to device
     model = model.to(device)
     
-    # Freeze modules
+    # Freeze modules (for ablation study)
     print("\nFreezing shared modules...")
     freeze_modules(model, opts.variant)
     
@@ -355,6 +390,8 @@ if __name__ == '__main__':
     # Dry run mode: just test checkpoint loading
     if opts.dry_run:
         print("✓ Dry run successful! Checkpoint loaded and modules frozen correctly.")
+        if opts.resume:
+            print(f"✓ Would resume from epoch {start_epoch}")
         print("Exiting without training.\n")
         sys.exit(0)
 
@@ -368,6 +405,14 @@ if __name__ == '__main__':
     lr_scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer, step_size=opts.lr_step, gamma=0.5
     )
+    
+    # Load optimizer and scheduler state if resuming
+    if opts.resume and optimizer_state is not None:
+        optimizer.load_state_dict(optimizer_state)
+        print("✓ Loaded optimizer state")
+    if opts.resume and scheduler_state is not None:
+        lr_scheduler.load_state_dict(scheduler_state)
+        print("✓ Loaded learning rate scheduler state")
     
     # Loss function
     criterion = nn.L1Loss()
@@ -384,6 +429,7 @@ if __name__ == '__main__':
         'variant': opts.variant,
         'start_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'config': vars(opts),
+        'resumed_from_epoch': start_epoch if opts.resume else None,
         'epochs': []
     }
     
@@ -391,13 +437,17 @@ if __name__ == '__main__':
     os.makedirs(log_dir, exist_ok=True)
     log_path = os.path.join(log_dir, f'ablation_{opts.variant}_log.json')
 
-    best_val_psnr = 0.0
     train_start_time = time.time()
+    
+    # Calculate epoch range
+    end_epoch = start_epoch + opts.additional_epochs
 
-    for epoch in range(opts.max_epochs):
+    for epoch in range(start_epoch, end_epoch):
         epoch_start_time = time.time()
         print(f"\n{'='*60}")
-        print(f"Epoch {epoch}/{opts.max_epochs-1} - Variant: {opts.variant}")
+        print(f"Epoch {epoch}/{end_epoch-1} - Variant: {opts.variant}")
+        if opts.resume and epoch == start_epoch:
+            print(f"(Resumed from checkpoint)")
         print(f"{'='*60}")
         
         model.train()
@@ -459,7 +509,7 @@ if __name__ == '__main__':
             best_val_psnr = val_psnr
         
         # Save checkpoint at configured frequency and always on last epoch
-        if (epoch % opts.save_freq == 0) or (epoch == opts.max_epochs - 1):
+        if (epoch % opts.save_freq == 0) or (epoch == end_epoch - 1):
             save_checkpoint(model, optimizer, lr_scheduler, epoch, val_psnr, best_val_psnr, opts)
         
         epoch_time = time.time() - epoch_start_time
